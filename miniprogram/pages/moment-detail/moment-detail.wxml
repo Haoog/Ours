@@ -1,0 +1,79 @@
+<view class="page grain" wx:if="{{found && item}}">
+  <view class="nav-bar" wx:if="{{navTotal > 1}}">
+    <view class="nav-bar__btn {{prevId ? '' : 'is-disabled'}}" bindtap="onTapPrev">‹ 上一条</view>
+    <text class="nav-bar__pos">{{navIndex}} / {{navTotal}}</text>
+    <view class="nav-bar__btn {{nextId ? '' : 'is-disabled'}}" bindtap="onTapNext">下一条 ›</view>
+  </view>
+  <view class="head fade-in">
+    <text class="head__date">{{item.md}} · {{item.dow}} · {{item.time}}</text>
+    <text class="head__who role-{{item.role === 'A' ? 'you' : 'them'}}">{{item.author}} 记的</text>
+    <text wx:if="{{item.tagLabel}}" class="head__tag chip">{{item.tagLabel}}</text>
+  </view>
+
+  <view wx:if="{{item.livePhotos.length > 0}}" class="live-gallery">
+    <view class="live-gallery__item" wx:for="{{item.livePhotos}}" wx:key="video">
+      <live-photo cover="{{item.cover}}" video="{{item.video}}" duration="{{item.duration}}" />
+    </view>
+  </view>
+
+  <view wx:if="{{item.video}}" class="video-wrap">
+    <video
+      class="video-wrap__player"
+      src="{{item.video}}"
+      controls
+      show-center-play-btn
+      object-fit="contain" />
+  </view>
+
+  <view wx:if="{{item.voiceFileID}}" class="voice-play card-soft" bindtap="onTapVoice">
+    <text class="voice-play__icon">{{item.voicePlaying ? '⏸' : '▶'}}</text>
+    <text class="voice-play__text">语音 · {{item.voiceDuration}} 秒</text>
+  </view>
+
+  <view wx:if="{{item.imgCount > 0}}" class="gallery">
+    <view class="gallery__item" wx:for="{{item.images}}" wx:key="*this" wx:for-item="src">
+      <view class="widescreen" data-src="{{src}}" bindtap="onTapImage">
+        <image src="{{src}}" mode="aspectFill" lazy-load />
+        <view class="gallery__gif" wx:if="{{src.indexOf('.gif') !== -1 || src.indexOf('.GIF') !== -1}}">GIF</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="caption card-soft">{{item.content || '（这一条还没有字）'}}</view>
+
+  <view class="footer-meta card-soft" wx:if="{{item.location}}">
+    <text>📍 {{item.location}}</text>
+  </view>
+
+  <view class="interact card-soft" wx:if="{{canInteract}}">
+    <view class="interact__row">
+      <view class="like-btn {{liked ? 'is-on' : ''}}" bindtap="onToggleLike">
+        <text>{{liked ? '♥' : '♡'}} {{likeCount}}</text>
+      </view>
+    </view>
+    <view class="comments">
+      <text class="comments__title">评论</text>
+      <view class="comment" wx:for="{{comments}}" wx:key="id">
+        <text class="comment__who">{{item.author}}</text>
+        <text class="comment__text">{{item.content}}</text>
+        <text wx:if="{{item.canDelete}}" class="comment__del" data-id="{{item.id}}" bindtap="onDeleteComment">删除</text>
+      </view>
+      <view wx:if="{{comments.length === 0}}" class="comments__empty">还没有评论</view>
+    </view>
+    <view class="comment-compose">
+      <input class="comment-compose__input" placeholder="说点什么…" value="{{commentDraft}}" bindinput="onCommentInput" />
+      <view class="comment-compose__send" bindtap="onSubmitComment">发送</view>
+    </view>
+  </view>
+
+  <view class="actions" wx:if="{{!item.isSystem}}">
+    <view class="btn-action btn-action--ghost" bindtap="onTapDelete">删除这条</view>
+  </view>
+</view>
+
+<view class="empty-stage" wx:else>
+  <text class="key">找不到这条了</text>
+  <text>可能已经被删掉啦</text>
+</view>
+
+<pet-float />

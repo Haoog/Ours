@@ -1,0 +1,15 @@
+<view class="live-photo" bindtap="onTap">
+  <image class="live-photo__cover" src="{{cover}}" mode="aspectFill" />
+  <video
+    wx:if="{{playing}}"
+    class="live-photo__video"
+    src="{{playSrc}}"
+    autoplay
+    loop
+    show-center-play-btn="{{false}}"
+    controls="{{false}}"
+    object-fit="cover"
+    muted="{{false}}" />
+  <view class="live-photo__badge">实况</view>
+  <view class="live-photo__hint" wx:if="{{!playing}}">轻触播放</view>
+</view>

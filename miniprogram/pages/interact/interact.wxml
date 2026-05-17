@@ -1,0 +1,85 @@
+<view wx:if="{{!pageReady}}" class="page page--loading grain">
+  <view class="empty-stage">
+    <kitty-face size="md" mood="awake" />
+    <text class="key">加载中…</text>
+  </view>
+</view>
+
+<view wx:else class="page grain">
+  <view class="head fade-in">
+    <kitty-face size="md" mood="awake" />
+    <text class="head__tag tag tag--accent">互动</text>
+    <text class="head__title serif">吐槽墙 · 小纸条</text>
+  </view>
+
+  <view wx:if="{{loadError}}" class="err-banner card-soft" bindtap="onRetryLoad">
+    <text>{{loadError}}</text>
+    <text class="err-banner__retry">点此重试</text>
+  </view>
+
+  <view class="tabs card-soft seg-strip">
+    <view class="seg-sticker {{tab === 'rant' ? 'is-on' : ''}}" data-tab="rant" bindtap="onSwitchTab">吐槽墙</view>
+    <view class="seg-sticker {{tab === 'note' ? 'is-on' : ''}}" data-tab="note" bindtap="onSwitchTab">
+      小纸条<text wx:if="{{noteUnread > 0}}" class="tabs__badge">{{noteUnread}}</text>
+    </view>
+  </view>
+
+  <block wx:if="{{tab === 'rant'}}">
+    <view wx:if="{{!emptyRant}}" class="list">
+      <view class="rant card-soft" wx:for="{{rants}}" wx:key="id">
+        <view class="rant__meta">
+          <text class="rant__who">{{item.author}}</text>
+          <text class="rant__date">{{item.md}}</text>
+        </view>
+        <text class="rant__text">{{item.content}}</text>
+        <text class="rant__del" data-id="{{item.id}}" bindtap="onDeleteRant">删除</text>
+      </view>
+    </view>
+    <view wx:else class="empty-stage">
+      <text class="key">还没有吐槽</text>
+      <text>点右下角发一条</text>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view wx:if="{{!emptyNote}}" class="list">
+      <view
+        class="note card-soft {{item.isUnread ? 'is-unread' : ''}}"
+        wx:for="{{notes}}"
+        wx:key="id"
+        data-id="{{item.id}}"
+        bindtap="onTapNote">
+        <text class="note__text">{{item.content}}</text>
+        <text class="note__sub">{{item.sub}}</text>
+      </view>
+    </view>
+    <view wx:else class="empty-stage">
+      <text class="key">还没有小纸条</text>
+      <text>{{bound ? '写一条给她' : '她加入后可用'}}</text>
+    </view>
+  </block>
+
+  <view class="fab" bindtap="openCompose">
+    <view class="fab-sticker">+</view>
+  </view>
+</view>
+
+<view class="sheet-mask" wx:if="{{composeOpen}}" bindtap="closeCompose"></view>
+<view class="sheet" wx:if="{{composeOpen}}">
+  <view class="sheet__head">
+    <text class="sheet__title serif">{{tab === 'rant' ? '发吐槽' : '写小纸条'}}</text>
+    <text class="sheet__close" bindtap="closeCompose">关闭</text>
+  </view>
+  <textarea
+    class="sheet__input"
+    placeholder="{{tab === 'rant' ? '短句吐槽…' : '悄悄话…'}}"
+    maxlength="200"
+    value="{{composeDraft}}"
+    bindinput="onComposeInput"
+    auto-height />
+  <view class="sheet__actions">
+    <view class="sticker-send" bindtap="onSubmitCompose">发送</view>
+  </view>
+</view>
+
+<pet-float />

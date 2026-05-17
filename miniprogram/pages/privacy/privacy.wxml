@@ -1,0 +1,44 @@
+<view class="page grain">
+  <view class="head">
+    <kitty-face size="md" mood="normal" />
+    <text class="head__tag tag tag--accent">Ours</text>
+    <text class="head__title serif">隐私政策</text>
+    <text class="head__updated">更新日期：2026-05-16</text>
+  </view>
+
+  <view class="block card-soft">
+    <text class="block__h">我们是谁</text>
+    <text class="block__p">「Ours」是仅供情侣两人使用的私密记录小程序。数据存储在微信云开发环境中，不对公众开放。</text>
+  </view>
+
+  <view class="block card-soft">
+    <text class="block__h">收集的信息</text>
+    <text class="block__p">• 微信 openid（用于识别你与另一半，完成绑定与鉴权）</text>
+    <text class="block__p">• 你填写的昵称、在一起开始日期</text>
+    <text class="block__p">• 你主动发布的文字、图片、视频、语音、实况照片</text>
+    <text class="block__p">• 你通过「选择地点」主动标注的位置名称与坐标</text>
+    <text class="block__p">• 每日签到的心情与可选备注</text>
+  </view>
+
+  <view class="block card-soft">
+    <text class="block__h">我们不会</text>
+    <text class="block__p">• 在后台持续获取你的 GPS 定位（地点仅在你点选时出现）</text>
+    <text class="block__p">• 向第三方出售或出租你的数据</text>
+    <text class="block__p">• 将你们的动态展示给空间外的用户</text>
+  </view>
+
+  <view class="block card-soft">
+    <text class="block__h">内容安全</text>
+    <text class="block__p">发布的文字与签到备注会经微信内容安全接口检测，不合规内容将无法保存。</text>
+  </view>
+
+  <view class="block card-soft">
+    <text class="block__h">数据删除</text>
+    <text class="block__p">创建者可在「我们」页清空全部记录，将删除云数据库中的动态、签到与空间信息，并尝试删除已上传的云存储文件。</text>
+  </view>
+
+  <view class="block card-soft">
+    <text class="block__h">联系我们</text>
+    <text class="block__p">如有疑问，请通过微信小程序「意见反馈」与我们联系。</text>
+  </view>
+</view>

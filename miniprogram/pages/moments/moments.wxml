@@ -1,0 +1,270 @@
+<view class="page grain reel-page">
+  <view class="reel-hero fade-in">
+    <view class="reel-hero__top">
+      <kitty-face size="sm" mood="normal" />
+      <text class="reel-hero__tag tag tag--accent">回忆 · 片段馆</text>
+    </view>
+    <text class="reel-hero__title serif">卷轴</text>
+    <text class="reel-hero__sub" wx:if="{{briefStats.total > 0}}">{{briefStats.total}} 个片段 · 像翻一部只属于你们的短片</text>
+    <text class="reel-hero__sub" wx:else>把日子剪成片段，慢慢放映</text>
+  </view>
+
+  <view class="view-tabs card-soft seg-strip">
+    <view class="seg-sticker {{viewMode === 'timeline' ? 'is-on' : ''}}" data-mode="timeline" bindtap="onSwitchView">卷轴</view>
+    <view class="seg-sticker {{viewMode === 'map' ? 'is-on' : ''}}" data-mode="map" bindtap="onSwitchView">地图</view>
+    <view class="seg-sticker {{viewMode === 'collections' ? 'is-on' : ''}}" data-mode="collections" bindtap="onSwitchView">合辑</view>
+    <view class="seg-sticker {{viewMode === 'recap' ? 'is-on' : ''}}" data-mode="recap" bindtap="onSwitchView">回顾</view>
+  </view>
+
+  <view class="search-bar" wx:if="{{viewMode === 'timeline'}}">
+    <input
+      class="search-bar__input"
+      placeholder="搜索片段文字…"
+      value="{{searchKeyword}}"
+      confirm-type="search"
+      bindinput="onSearchInput"
+      bindconfirm="onSearchConfirm" />
+    <text wx:if="{{searchActive}}" class="search-bar__clear" bindtap="onClearSearch">清除</text>
+  </view>
+
+  <scroll-view class="filters" scroll-x enhanced show-scrollbar="{{false}}" wx:if="{{viewMode === 'timeline'}}">
+    <view
+      class="seg-sticker seg-sticker--chip {{filterTag === item.key ? 'is-on' : ''}}"
+      wx:for="{{tagFilters}}"
+      wx:key="key"
+      data-key="{{item.key}}"
+      bindtap="onPickFilter">{{item.label}}</view>
+  </scroll-view>
+
+  <scroll-view
+    class="otd-strip"
+    scroll-x
+    enhanced
+    show-scrollbar="{{false}}"
+    wx:if="{{viewMode === 'timeline' && onThisDay.length && !searchActive}}">
+    <text class="otd-strip__label">那年今日</text>
+    <view
+      class="otd-ticket"
+      wx:for="{{onThisDay}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      bindtap="onTapScene">
+      <text class="otd-ticket__no">#{{item.sceneNo}}</text>
+      <image wx:if="{{item.coverUrl}}" class="otd-ticket__img" src="{{item.coverUrl}}" mode="aspectFill" lazy-load />
+      <text class="otd-ticket__date">{{item.md}}</text>
+      <text class="otd-ticket__cap">{{item.content || '…'}}</text>
+    </view>
+  </scroll-view>
+
+  <block wx:if="{{viewMode === 'timeline'}}">
+    <view class="reel-stream" wx:if="{{!empty}}">
+      <block wx:for="{{rows}}" wx:key="key">
+        <view class="reel-month" wx:if="{{item.type === 'month'}}">
+          <view class="reel-month__line"></view>
+          <text class="reel-month__text">{{item.label}}</text>
+          <view class="reel-month__line"></view>
+        </view>
+
+        <view class="reel-milestone" wx:elif="{{item.type === 'milestone'}}">
+          <text class="reel-milestone__star">✦</text>
+          <text class="reel-milestone__title">{{item.title}}</text>
+          <text class="reel-milestone__sub">{{item.sub}}</text>
+        </view>
+
+        <view
+          wx:elif="{{item.type === 'moment'}}"
+          class="scene scene--{{item.scene.stagger}} scene--{{item.scene.role === 'A' ? 'you' : 'them'}}"
+          data-id="{{item.scene.id}}"
+          bindtap="onTapScene">
+          <view class="scene__sprocket scene__sprocket--l"></view>
+
+          <view class="scene__cell">
+            <text class="scene__watermark">#{{item.scene.sceneNo}}</text>
+
+            <block wx:if="{{item.scene.layout === 'signal'}}">
+              <view class="scene__signal">
+                <text class="scene__signal-badge">SIGNAL · 双人签到</text>
+                <text class="scene__signal-text">{{item.scene.content}}</text>
+              </view>
+            </block>
+
+            <block wx:else>
+              <view class="scene__head">
+                <view class="scene__head-left">
+                  <text class="scene__index">SCENE {{item.scene.sceneNo}}</text>
+                  <text class="scene__author role-{{item.scene.role === 'A' ? 'you' : 'them'}}">{{item.scene.author}}</text>
+                </view>
+                <view class="scene__head-right">
+                  <text class="scene__md">{{item.scene.md}}</text>
+                  <text class="scene__dow">{{item.scene.dow}}</text>
+                </view>
+              </view>
+
+              <view class="scene__cinema {{item.scene.coverUrl ? '' : 'scene__cinema--empty'}}" wx:if="{{item.scene.layout === 'cinema'}}">
+                <image
+                  wx:if="{{item.scene.coverUrl}}"
+                  class="scene__cinema-img"
+                  src="{{item.scene.coverUrl}}"
+                  mode="aspectFill"
+                  lazy-load />
+                <view class="scene__cinema-shade" wx:if="{{item.scene.coverUrl}}"></view>
+                <view class="scene__cinema-badges">
+                  <text wx:if="{{item.scene.hasLive}}" class="scene__badge">LIVE</text>
+                  <text wx:if="{{item.scene.hasVideo}}" class="scene__badge">VIDEO</text>
+                  <text wx:if="{{item.scene.hasVoice}}" class="scene__badge">VOICE {{item.scene.voiceDuration}}″</text>
+                </view>
+                <text class="scene__cinema-cap {{item.scene.coverUrl ? '' : 'scene__cinema-cap--static'}}" wx:if="{{item.scene.content}}">{{item.scene.content}}</text>
+              </view>
+
+              <view class="scene__bento scene__bento--{{item.scene.bentoClass}}" wx:elif="{{item.scene.layout === 'collage'}}">
+                <view
+                  class="scene__bento-cell scene__bento-cell--{{index}}"
+                  wx:for="{{item.scene.previewImages}}"
+                  wx:for-item="src"
+                  wx:key="*this">
+                  <image class="scene__bento-img" src="{{src}}" mode="aspectFill" lazy-load />
+                </view>
+                <text class="scene__bento-cap" wx:if="{{item.scene.content}}">{{item.scene.content}}</text>
+              </view>
+
+              <scroll-view
+                class="scene__filmstrip"
+                scroll-x
+                enhanced
+                show-scrollbar="{{false}}"
+                wx:elif="{{item.scene.layout === 'reel'}}">
+                <view class="scene__filmstrip-inner">
+                  <view
+                    class="scene__frame-thumb"
+                    wx:for="{{item.scene.previewImages}}"
+                    wx:for-item="src"
+                    wx:key="*this">
+                    <image src="{{src}}" mode="aspectFill" lazy-load />
+                  </view>
+                  <view class="scene__frame-more" wx:if="{{item.scene.imageCount > item.scene.previewImages.length}}">
+                    +{{item.scene.imageCount - item.scene.previewImages.length}}
+                  </view>
+                </view>
+                <text class="scene__filmstrip-cap" wx:if="{{item.scene.content}}">{{item.scene.content}}</text>
+              </scroll-view>
+
+              <view class="scene__verse" wx:elif="{{item.scene.layout === 'verse'}}">
+                <text class="scene__verse-text">{{item.scene.content || '（这一格只有沉默）'}}</text>
+                <view class="scene__verse-badges" wx:if="{{item.scene.hasVideo || item.scene.hasLive || item.scene.hasVoice}}">
+                  <text wx:if="{{item.scene.hasLive}}">实况</text>
+                  <text wx:if="{{item.scene.hasVideo}}">视频</text>
+                  <text wx:if="{{item.scene.hasVoice}}">语音</text>
+                </view>
+              </view>
+
+              <view class="scene__meta">
+                <text wx:if="{{item.scene.tagLabel}}" class="scene__tag">{{item.scene.tagLabel}}</text>
+                <text wx:if="{{item.scene.location}}" class="scene__loc">{{item.scene.location}}</text>
+              </view>
+
+              <view class="scene__pulse">
+                <text class="scene__pulse-item {{item.scene.likedByMe ? 'is-on' : ''}}">
+                  {{item.scene.likedByMe ? '♥' : '♡'}}<text wx:if="{{item.scene.likeCount > 0}}"> {{item.scene.likeCount}}</text>
+                </text>
+                <text class="scene__pulse-item">
+                  ◦<text wx:if="{{item.scene.commentCount > 0}}"> {{item.scene.commentCount}}</text> 评论
+                </text>
+              </view>
+            </block>
+          </view>
+
+          <view class="scene__sprocket scene__sprocket--r"></view>
+        </view>
+      </block>
+
+      <view class="load-more" wx:if="{{loadingMore}}">放映中…</view>
+      <view class="load-more" wx:elif="{{!hasMore}}">🐾 · END OF REEL ·</view>
+      <view class="load-more load-more--hint" wx:else>上拉，继续放映</view>
+    </view>
+
+    <view wx:else class="empty-stage">
+      <view class="kitty-wrap"><kitty-face size="md" mood="dim" /></view>
+      <text class="key">{{searchActive ? '没搜到' : '卷轴还是空的'}}</text>
+      <text wx:if="{{!searchActive}}">剪下第一个片段吧</text>
+      <view wx:if="{{!searchActive}}" style="margin-top:40rpx; display:flex; justify-content:center;">
+        <view class="sticker-send" bindtap="onTapCompose">记一条</view>
+      </view>
+    </view>
+
+    <view class="fab" bindtap="onTapCompose" wx:if="{{!empty && !searchActive}}">
+      <view class="fab-sticker">+</view>
+    </view>
+  </block>
+
+  <view class="map-panel" wx:if="{{viewMode === 'map'}}">
+    <view wx:if="{{mapEmpty}}" class="empty-stage">
+      <text class="key">还没有足迹</text>
+      <text>发动态时选地点，会出现在这里</text>
+    </view>
+    <map
+      wx:else
+      class="map-panel__map"
+      latitude="{{centerLat}}"
+      longitude="{{centerLng}}"
+      scale="{{mapScale}}"
+      markers="{{markers}}"
+      show-location
+      bindmarkertap="onMapMarkerTap" />
+    <view class="map-cities" wx:if="{{cities.length}}">
+      <text class="map-cities__title">去过</text>
+      <text class="map-cities__chip" wx:for="{{cities}}" wx:key="name">{{item.name}} ×{{item.count}}</text>
+    </view>
+  </view>
+
+  <view class="collections-panel" wx:if="{{viewMode === 'collections'}}">
+    <text class="panel-title">按标签</text>
+    <view class="coll-grid">
+      <view
+        class="coll-card"
+        wx:for="{{collections.tags}}"
+        wx:key="key"
+        data-key="{{item.key}}"
+        bindtap="onTapCollectionTag">
+        <text class="coll-card__label">{{item.label}}</text>
+        <text class="coll-card__count">{{item.count}} 条</text>
+      </view>
+    </view>
+    <text class="panel-title">按地点</text>
+    <view class="place-list">
+      <view
+        class="place-row"
+        wx:for="{{collections.places}}"
+        wx:key="name"
+        data-name="{{item.name}}"
+        bindtap="onTapCollectionPlace">
+        <text>{{item.name}}</text>
+        <text class="place-row__n">{{item.count}}</text>
+      </view>
+      <view wx:if="{{!collections.places.length}}" class="empty-hint">暂无地点合辑</view>
+    </view>
+  </view>
+
+  <view class="recap-panel" wx:if="{{viewMode === 'recap'}}">
+    <view class="recap-year">{{recapYear}} 年</view>
+    <scroll-view class="recap-months" scroll-x enhanced show-scrollbar="{{false}}">
+      <view
+        class="recap-month {{recapMonth === item ? 'is-on' : ''}}"
+        wx:for="{{recapMonths}}"
+        wx:key="*this"
+        data-month="{{item}}"
+        bindtap="onRecapMonthTap">{{item}}月</view>
+    </scroll-view>
+    <view class="recap-stats card-soft" wx:if="{{recapStats}}">
+      <text class="recap-stats__main">{{recapMonth}} 月 · {{recapStats.total}} 个片段</text>
+      <view class="recap-stats__row">
+        <text>我 {{recapStats.countA}}</text>
+        <text>她 {{recapStats.countB}}</text>
+        <text>地点 {{recapStats.placeCount}}</text>
+      </view>
+      <text class="recap-stats__tag" wx:if="{{recapStats.topTag !== '—'}}">主调 · {{recapStats.topTag}}</text>
+    </view>
+    <view wx:else class="empty-hint">加载中…</view>
+  </view>
+
+  <pet-float />
+</view>

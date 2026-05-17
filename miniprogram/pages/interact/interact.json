@@ -1,0 +1,9 @@
+{
+  "navigationBarTitleText": "互动",
+  "navigationBarBackgroundColor": "#F5F3FA",
+  "navigationBarTextStyle": "black",
+  "usingComponents": {
+    "kitty-face": "/components/kitty-face/kitty-face",
+    "pet-float": "/components/pet-float/pet-float"
+  }
+}

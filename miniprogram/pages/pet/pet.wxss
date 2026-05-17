@@ -1,0 +1,68 @@
+.page {
+  min-height: 100vh;
+  padding: 32rpx var(--space-edge) calc(80rpx + env(safe-area-inset-bottom));
+}
+
+.head {
+  text-align: center;
+  margin-bottom: 28rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+}
+.head__kitty {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8rpx;
+}
+.head__title {
+  font-size: 44rpx;
+  font-weight: 600;
+  color: var(--c-text);
+}
+.head__sub {
+  font-size: 26rpx;
+  color: var(--c-muted);
+  padding: 0 24rpx;
+}
+
+.stage {
+  padding: 40rpx 28rpx 32rpx;
+  margin-bottom: 24rpx;
+}
+
+.tips {
+  padding: 24rpx 28rpx;
+  margin-bottom: 32rpx;
+}
+.tips__line {
+  display: block;
+  font-size: 26rpx;
+  color: var(--c-muted);
+  line-height: 1.7;
+}
+
+.actions {
+  display: flex;
+  gap: 20rpx;
+  justify-content: center;
+}
+.actions .pet-sticker {
+  flex: 1;
+  max-width: 300rpx;
+}
+
+.name-box {
+  padding: 28rpx;
+  margin-bottom: 40rpx;
+}
+.name-box__label {
+  display: block;
+  font-size: 26rpx;
+  color: var(--c-muted);
+  margin-bottom: 12rpx;
+}
+.name-box__input {
+  font-size: 32rpx;
+  color: var(--c-text);
+}

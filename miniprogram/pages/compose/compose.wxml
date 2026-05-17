@@ -1,0 +1,120 @@
+<view class="page grain">
+  <view class="head fade-in">
+    <view class="head__cat">
+      <kitty-face size="md" mood="awake" />
+    </view>
+    <text class="head__tag tag tag--accent">记一条</text>
+    <text class="head__title serif">写下这一刻</text>
+  </view>
+
+  <view class="viewfinder card-soft">
+    <textarea
+      class="viewfinder__text"
+      placeholder="文字、心情、今天发生的事……"
+      placeholder-style="color: rgba(74,68,88,0.35)"
+      maxlength="500"
+      value="{{content}}"
+      bindinput="onContentInput"
+      auto-height />
+    <view class="viewfinder__count tag">{{contentLen}} / 500</view>
+  </view>
+
+  <view class="media-bar card-soft">
+    <view class="media-bar__btn" bindtap="onPickAlbum">
+      <text class="media-bar__icon">＋</text>
+      <text>相册</text>
+    </view>
+    <view class="media-bar__btn" bindtap="onPickLivePhoto">
+      <text class="media-bar__icon">实况</text>
+      <text>Live</text>
+    </view>
+    <view class="media-bar__btn" bindtap="onPickVideo">
+      <text class="media-bar__icon">▶</text>
+      <text>视频</text>
+    </view>
+    <view class="media-bar__btn {{recording ? 'is-recording' : ''}}" bindtap="onToggleRecord">
+      <text class="media-bar__icon">🎙</text>
+      <text>{{recording ? recordSec + 's' : '语音'}}</text>
+    </view>
+  </view>
+  <text class="media-hint">支持实况 / GIF / 多图，可与长视频、语音混发；实况请点 Live 或相册里带实况效果的照片</text>
+
+  <view class="live-list" wx:if="{{livePhotos.length > 0}}">
+    <view class="live-list__item" wx:for="{{livePhotos}}" wx:key="id">
+      <view class="live-list__frame">
+        <live-photo cover="{{item.cover}}" video="{{item.video}}" duration="{{item.duration}}" />
+      </view>
+      <view class="live-list__remove" data-id="{{item.id}}" bindtap="onRemoveLivePhoto">删除实况</view>
+    </view>
+  </view>
+
+  <view class="grid" wx:if="{{images.length > 0}}">
+    <view class="grid__cell" wx:for="{{images}}" wx:key="*this" wx:for-item="src">
+      <image src="{{src}}" mode="aspectFill"></image>
+      <view class="grid__badge" wx:if="{{src.indexOf('.gif') !== -1 || src.indexOf('.GIF') !== -1}}">动图</view>
+      <view class="grid__remove" data-src="{{src}}" bindtap="onRemoveImage">×</view>
+    </view>
+    <view class="grid__cell grid__cell--add" bindtap="onPickAlbum">
+      <text class="grid__add-icon">+</text>
+      <text class="grid__cell__hint">{{images.length}} 张 · 继续加</text>
+    </view>
+  </view>
+
+  <view class="video-box card-soft" wx:if="{{video}}">
+    <video class="video-box__player" src="{{video}}" controls show-center-play-btn></video>
+    <view class="video-box__remove" bindtap="onRemoveVideo">删除视频</view>
+  </view>
+
+  <view class="voice-box card-soft" wx:if="{{voice}}">
+    <view class="voice-box__wave">〰</view>
+    <text class="voice-box__dur">{{voice.duration}} 秒语音</text>
+    <view class="voice-box__remove" bindtap="onRemoveVoice">删除</view>
+  </view>
+
+  <view class="tags card-soft">
+    <text class="tags__label">标签</text>
+    <view class="tags__row">
+      <view
+        wx:for="{{tagList}}"
+        wx:key="key"
+        class="tag-chip {{tagSelected === item.key ? 'is-on' : ''}}"
+        data-key="{{item.key}}"
+        bindtap="onPickTag">{{item.label}}</view>
+    </view>
+  </view>
+
+  <view class="meta card-soft">
+    <view class="meta__row" bindtap="onPickLocation">
+      <text class="meta__label">地点</text>
+      <text class="meta__val">{{location ? location : '选择地点'}}</text>
+    </view>
+    <view class="meta__row" wx:if="{{location}}">
+      <text class="meta__label"></text>
+      <text class="meta__clear" bindtap="onClearLocation">清除</text>
+    </view>
+    <view class="meta__row">
+      <text class="meta__label">记录人</text>
+      <text class="meta__val role-{{role === 'A' ? 'you' : 'them'}}">{{role === 'A' ? '我' : '她'}}</text>
+    </view>
+  </view>
+
+  <view class="actions">
+    <view class="btn-action btn-action--ghost" bindtap="onCancel">取消</view>
+    <view class="btn-action {{canPost && !posting ? '' : 'is-disabled'}}" bindtap="onSubmit">
+      {{posting ? '保存中…' : '保存'}}
+    </view>
+  </view>
+
+  <view class="upload-mask" wx:if="{{posting}}">
+    <view class="upload-panel card-soft">
+      <text class="upload-panel__title">正在保存</text>
+      <text class="upload-panel__hint">{{uploadHint || '请稍候'}}</text>
+      <view class="upload-bar">
+        <view class="upload-bar__fill" style="width: {{uploadProgress}}%;"></view>
+      </view>
+      <text class="upload-panel__pct">{{uploadProgress}}%</text>
+    </view>
+  </view>
+
+  <pet-float />
+</view>

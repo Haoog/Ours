@@ -1,0 +1,9 @@
+{
+  "navigationBarTitleText": "详情",
+  "navigationBarBackgroundColor": "#F5F3FA",
+  "navigationBarTextStyle": "black",
+  "backgroundColor": "#F5F3FA",
+  "usingComponents": {
+    "live-photo": "/components/live-photo/live-photo"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "navigationBarTitleText": "我们的宠物",
+  "navigationBarBackgroundColor": "#F5F3FA",
+  "usingComponents": {
+    "couple-pet": "/components/couple-pet/couple-pet",
+    "kitty-face": "/components/kitty-face/kitty-face"
+  }
+}

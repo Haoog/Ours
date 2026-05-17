@@ -1,0 +1,13 @@
+{
+  "name": "ours-wxapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OursWXAPP - 两个人的私密朋友圈（开发期 TS 校验配置）",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p miniprogram/tsconfig.json"
+  },
+  "devDependencies": {
+    "miniprogram-api-typings": "3.12.3",
+    "typescript": "5.4.5"
+  }
+}

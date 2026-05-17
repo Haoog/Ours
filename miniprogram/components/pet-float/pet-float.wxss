@@ -1,0 +1,177 @@
+.pf {
+  position: fixed;
+  left: 24rpx;
+  z-index: 900;
+  bottom: calc(32rpx + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12rpx;
+  pointer-events: none;
+}
+
+.pf--tab {
+  bottom: calc(120rpx + env(safe-area-inset-bottom));
+}
+
+.pf--open {
+  pointer-events: auto;
+}
+
+.pf__orb {
+  pointer-events: auto;
+  position: relative;
+  width: 104rpx;
+  height: 104rpx;
+  border-radius: 50%;
+  background: var(--c-surface);
+  box-shadow: var(--c-shadow);
+  border: 2rpx solid var(--c-accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pf--open .pf__orb {
+  box-shadow: 0 8rpx 28rpx rgba(139, 126, 200, 0.35);
+}
+
+.pf__badge {
+  position: absolute;
+  right: -4rpx;
+  bottom: -4rpx;
+  padding: 4rpx 10rpx;
+  border-radius: var(--r-pill);
+  background: var(--c-accent);
+  color: #fff;
+  font-size: 18rpx;
+  font-weight: 600;
+}
+
+.pf__panel {
+  pointer-events: auto;
+  width: 320rpx;
+  padding: 20rpx 24rpx;
+  animation: pf-in 0.2s ease;
+}
+
+@keyframes pf-in {
+  from {
+    opacity: 0;
+    transform: translateY(12rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pf__panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8rpx;
+}
+
+.pf__panel-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.pf__close {
+  font-size: 24rpx;
+  color: var(--c-accent);
+}
+
+.pf__lv {
+  display: block;
+  font-size: 22rpx;
+  color: var(--c-muted);
+  margin-bottom: 8rpx;
+}
+
+.pf__track {
+  height: 10rpx;
+  border-radius: var(--r-pill);
+  background: var(--c-surface-soft);
+  overflow: hidden;
+  margin-bottom: 10rpx;
+}
+
+.pf__fill {
+  height: 100%;
+  background: linear-gradient(90deg, #9b8ecf, #8b7ec8);
+  border-radius: var(--r-pill);
+}
+
+.pf__msg {
+  display: block;
+  font-size: 24rpx;
+  color: var(--c-muted);
+  line-height: 1.5;
+  margin-bottom: 14rpx;
+}
+
+.pf__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12rpx 10rpx;
+}
+
+/* 手帐贴纸风：不对称圆角 + 微倾，与全站胶囊主按钮区分 */
+.pf__btn {
+  padding: 12rpx 22rpx;
+  font-size: 24rpx;
+  font-weight: 600;
+  line-height: 1.25;
+  box-shadow: 0 5rpx 0 rgba(110, 98, 168, 0.07);
+}
+
+.pf__btn:active {
+  transform: scale(0.96) rotate(0deg) !important;
+}
+
+.pf__btn--feed {
+  border-radius: 26rpx 34rpx 18rpx 28rpx;
+  transform: rotate(-2.5deg);
+  background: linear-gradient(148deg, #FAF0E4 0%, #EDDCC8 100%);
+  color: #7A5E42;
+  border: 1rpx solid rgba(196, 154, 108, 0.32);
+}
+
+.pf__btn--pet {
+  border-radius: 34rpx 22rpx 28rpx 24rpx;
+  transform: rotate(2deg);
+  background: linear-gradient(148deg, #F4EEFC 0%, #E6DCF6 100%);
+  color: var(--c-accent-deep);
+  border: 1rpx solid var(--c-accent-soft);
+  font-weight: 500;
+}
+
+.pf__btn--tag {
+  border-radius: 10rpx 22rpx 22rpx 10rpx;
+  transform: rotate(-0.8deg);
+  padding: 10rpx 16rpx;
+  font-size: 22rpx;
+  font-weight: 500;
+  background: var(--c-surface-soft);
+  color: var(--c-muted);
+  border: 1rpx dashed rgba(110, 98, 168, 0.38);
+  box-shadow: none;
+}
+
+.pf__btn--adopt {
+  border-radius: 28rpx 24rpx 34rpx 26rpx;
+  transform: rotate(-1.5deg);
+  background: linear-gradient(160deg, #9b8ecf, #6e62a8);
+  color: #fff;
+  box-shadow: 0 8rpx 22rpx rgba(110, 98, 168, 0.28);
+}
+
+.pf__btn.is-off {
+  opacity: 0.42;
+  pointer-events: none;
+  box-shadow: none;
+}

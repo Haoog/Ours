@@ -1,0 +1,78 @@
+.page {
+  min-height: 100vh;
+  padding: 28rpx var(--space-edge) calc(180rpx + env(safe-area-inset-bottom));
+  background: var(--c-bg);
+}
+.head { display: flex; flex-direction: column; gap: 6rpx; margin-bottom: 20rpx; }
+.head__title { font-size: 40rpx; font-weight: 600; color: var(--c-text); }
+
+.page--loading {
+  min-height: 100vh;
+}
+
+.tabs {
+  margin-bottom: 20rpx;
+}
+.tabs__badge {
+  margin-left: 6rpx;
+  font-size: 22rpx;
+  color: var(--c-accent-deep);
+}
+
+.err-banner {
+  margin-bottom: 16rpx;
+  padding: 20rpx 24rpx;
+  font-size: 26rpx;
+  color: var(--c-accent-deep);
+  line-height: 1.5;
+}
+.err-banner__retry {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: var(--c-muted);
+}
+
+.list { display: flex; flex-direction: column; gap: 14rpx; }
+.rant { padding: 24rpx 28rpx; }
+.rant__meta { display: flex; justify-content: space-between; margin-bottom: 10rpx; font-size: 24rpx; color: var(--c-muted); }
+.rant__text { font-size: 30rpx; line-height: 1.6; color: var(--c-text); }
+.rant__del { display: block; margin-top: 14rpx; font-size: 24rpx; color: var(--c-accent-deep); }
+
+.note { padding: 24rpx 28rpx; }
+.note.is-unread { border-left: 6rpx solid var(--c-accent); }
+.note__text { font-size: 30rpx; color: var(--c-text); line-height: 1.55; }
+.note__sub { display: block; margin-top: 10rpx; font-size: 24rpx; color: var(--c-muted); }
+
+.sheet-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(74, 68, 88, 0.35);
+  z-index: 20;
+}
+.sheet {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 21;
+  background: var(--c-surface);
+  border-radius: 28rpx 28rpx 0 0;
+  padding: 28rpx var(--space-edge) calc(32rpx + env(safe-area-inset-bottom));
+}
+.sheet__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16rpx; }
+.sheet__title { font-size: 32rpx; font-weight: 600; }
+.sheet__close { font-size: 26rpx; color: var(--c-accent-deep); }
+.sheet__input {
+  min-height: 160rpx;
+  background: var(--c-surface-soft);
+  border-radius: var(--r-card);
+  padding: 20rpx 24rpx;
+  font-size: 28rpx;
+}
+.sheet__actions { margin-top: 20rpx; display: flex; justify-content: flex-end; }
+
+.fab {
+  position: fixed;
+  right: 36rpx;
+  bottom: calc(120rpx + env(safe-area-inset-bottom));
+  z-index: 10;
+}

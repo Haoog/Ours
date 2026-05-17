@@ -1,0 +1,43 @@
+<view
+  class="pf {{tabPage ? 'pf--tab' : ''}} {{expanded ? 'pf--open' : ''}}"
+  wx:if="{{show}}"
+  catchtouchmove="stopTap">
+  <view class="pf__panel card-soft" wx:if="{{expanded}}" catchtap="stopTap">
+    <view class="pf__panel-head">
+      <text class="pf__panel-title" wx:if="{{pet && pet.adopted}}">{{pet.name}}</text>
+      <text class="pf__panel-title" wx:else>小猫</text>
+      <text class="pf__close" bindtap="onCollapse">收起</text>
+    </view>
+
+    <block wx:if="{{pet && pet.adopted}}">
+      <text class="pf__lv">Lv.{{pet.level}} · 心情 {{pet.happiness}}</text>
+      <view class="pf__track">
+        <view class="pf__fill" style="width: {{pet.happiness}}%;"></view>
+      </view>
+      <text class="pf__msg">{{pet.message}}</text>
+      <view class="pf__actions">
+        <view
+          class="pf__btn pf__btn--feed {{pet.canFeed ? '' : 'is-off'}}"
+          data-action="feed"
+          bindtap="onQuickAction">🍙 喂食</view>
+        <view
+          class="pf__btn pf__btn--pet {{pet.canPet ? '' : 'is-off'}}"
+          data-action="pet"
+          bindtap="onQuickAction">🤍 抚摸</view>
+        <view class="pf__btn pf__btn--tag" bindtap="onGoPet">详情 →</view>
+      </view>
+    </block>
+
+    <block wx:else>
+      <text class="pf__msg">还没有小猫，带一只白猫回家吧</text>
+      <view class="pf__actions">
+        <view class="pf__btn pf__btn--adopt" bindtap="onGoPet">去领养</view>
+      </view>
+    </block>
+  </view>
+
+  <view class="pf__orb" bindtap="onToggleExpand">
+    <kitty-face size="sm" mood="{{kittyMood}}" />
+    <view class="pf__badge" wx:if="{{pet && pet.adopted}}">Lv.{{pet.level}}</view>
+  </view>
+</view>

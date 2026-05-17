@@ -1,0 +1,13 @@
+{
+  "navigationBarTitleText": "回忆",
+  "navigationBarBackgroundColor": "#F5F3FA",
+  "navigationBarTextStyle": "black",
+  "backgroundColor": "#F5F3FA",
+  "enablePullDownRefresh": true,
+  "onReachBottomDistance": 120,
+  "backgroundTextStyle": "dark",
+  "usingComponents": {
+    "kitty-face": "/components/kitty-face/kitty-face",
+    "live-photo": "/components/live-photo/live-photo"
+  }
+}

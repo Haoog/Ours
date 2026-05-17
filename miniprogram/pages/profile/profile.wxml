@@ -1,0 +1,90 @@
+<view class="page grain">
+  <view class="head fade-in">
+    <view class="head__cat">
+      <kitty-face size="md" mood="awake" />
+    </view>
+    <text class="head__tag tag tag--accent">Ours</text>
+    <text class="head__title serif">我们</text>
+  </view>
+
+  <view class="cast">
+    <view class="cast__card is-you {{role === 'A' ? 'is-current' : ''}}">
+      <text class="cast__badge">我</text>
+      <text class="cast__name">{{youName}}</text>
+      <text class="cast__role">雾蓝紫</text>
+    </view>
+    <view class="cast__card is-them {{role === 'B' ? 'is-current' : ''}}">
+      <text class="cast__badge">她</text>
+      <text class="cast__name">{{themName}}</text>
+      <text class="cast__role">薰衣草紫</text>
+    </view>
+  </view>
+
+  <view class="row card-soft" bindtap="onEditNickname">
+    <text class="row__label">我的昵称</text>
+    <text class="row__val accent">{{youName}} →</text>
+  </view>
+
+  <view class="row card-soft" wx:if="{{partnerWechatId}}">
+    <text class="row__label">她（直接绑定）</text>
+    <text class="row__val">{{partnerWechatId}}</text>
+  </view>
+
+  <picker mode="date" value="{{startDate}}" bindchange="onPickStartDate">
+    <view class="row card-soft row--picker">
+      <text class="row__label">在一起从</text>
+      <text class="row__val">{{startDate || '—'}}</text>
+    </view>
+  </picker>
+
+  <view class="row card-soft">
+    <text class="row__label">在一起</text>
+    <text class="row__val accent">第 {{days}} 天</text>
+  </view>
+
+  <view class="row card-soft" bindtap="onTapInvite" wx:if="{{!bound}}">
+    <text class="row__label">邀请她</text>
+    <text class="row__val">分享 →</text>
+  </view>
+
+  <view class="row card-soft" bindtap="onTapPet">
+    <text class="row__label">我们的小猫</text>
+    <text class="row__val accent">{{petLabel}} →</text>
+  </view>
+
+  <view class="row card-soft" bindtap="onTapAnniversaries">
+    <text class="row__label">纪念日</text>
+    <text class="row__val">管理 →</text>
+  </view>
+
+  <view class="row card-soft" bindtap="onTapMap">
+    <text class="row__label">足迹地图</text>
+    <text class="row__val">查看 →</text>
+  </view>
+
+  <view class="row card-soft" bindtap="onTapCheckinHistory">
+    <text class="row__label">签到记录</text>
+    <text class="row__val">日历 →</text>
+  </view>
+
+  <view class="row card-soft" bindtap="onTapPrivacy">
+    <text class="row__label">隐私政策</text>
+    <text class="row__val">查看 →</text>
+  </view>
+
+  <view class="danger">
+    <text class="danger__title">清空所有记录</text>
+    <view class="danger__btn" bindtap="onToggleClear">{{showClear ? '收起' : '展开'}}</view>
+
+    <view wx:if="{{showClear}}" class="danger__panel card-soft">
+      <text class="danger__hint">将删除全部动态、签到和绑定。请输入「确认」。</text>
+      <input class="danger__input" placeholder="输入「确认」" placeholder-style="color: rgba(74,68,88,0.35)" value="{{confirmText}}" bindinput="onConfirmInput" />
+      <view class="danger__actions">
+        <view class="btn-action btn-action--ghost" bindtap="onToggleClear">取消</view>
+        <view class="btn-danger" bindtap="onConfirmClear">确认清空</view>
+      </view>
+    </view>
+  </view>
+
+  <pet-float />
+</view>

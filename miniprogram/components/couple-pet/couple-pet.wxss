@@ -1,0 +1,107 @@
+.cpet {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.cpet--bounce .cpet__scene {
+  animation: pet-bounce 2.4s ease-in-out infinite;
+}
+
+@keyframes pet-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8rpx); }
+}
+
+.cpet__scene {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  min-height: 120rpx;
+  padding-top: 16rpx;
+}
+
+.cpet__scene--baby { transform: scale(0.88); }
+.cpet__scene--teen { transform: scale(0.94); }
+
+.cpet--large .cpet__scene { min-height: 160rpx; }
+.cpet--compact .cpet__scene { min-height: 88rpx; padding-top: 8rpx; }
+
+.cpet__floor {
+  position: absolute;
+  bottom: 4rpx;
+  width: 140rpx;
+  height: 16rpx;
+  border-radius: 50%;
+  background: rgba(110, 98, 168, 0.12);
+}
+
+.cpet--large .cpet__floor { width: 180rpx; }
+.cpet--compact .cpet__floor { width: 100rpx; height: 12rpx; }
+
+.cpet__shadow {
+  position: absolute;
+  bottom: 0;
+  width: 80rpx;
+  height: 8rpx;
+  border-radius: 50%;
+  background: rgba(74, 68, 88, 0.08);
+}
+
+.cpet__meta { text-align: center; }
+.cpet__name {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: var(--c-text);
+}
+.cpet__lv {
+  display: block;
+  margin-top: 4rpx;
+  font-size: 24rpx;
+  color: var(--c-muted);
+}
+
+.cpet--compact .cpet__name { font-size: 28rpx; }
+
+.cpet__bars {
+  width: 100%;
+  max-width: 420rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+}
+
+.cpet--compact .cpet__bars { max-width: 200rpx; }
+
+.cpet__bar {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+.cpet__bar-label {
+  width: 56rpx;
+  font-size: 22rpx;
+  color: var(--c-muted);
+  flex-shrink: 0;
+}
+.cpet__track {
+  flex: 1;
+  height: 12rpx;
+  border-radius: var(--r-pill);
+  background: var(--c-surface-soft);
+  overflow: hidden;
+}
+.cpet__fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  transition: width 0.35s ease;
+}
+.cpet__fill--mood {
+  background: linear-gradient(90deg, #9B8ECF, #8B7EC8);
+}
+.cpet__fill--exp {
+  background: linear-gradient(90deg, #D4A574, #C49A6C);
+}

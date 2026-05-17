@@ -1,0 +1,56 @@
+<view class="page grain">
+  <view class="head fade-in">
+    <view class="head__cat">
+      <kitty-face size="md" mood="normal" />
+    </view>
+    <text class="head__tag tag tag--accent">签到 · 日历</text>
+    <text class="head__title serif">{{title}}</text>
+    <text class="head__sub">双人同日签到才算连续 streak</text>
+  </view>
+
+  <view class="month-nav card-soft">
+    <text class="month-nav__btn" bindtap="onPrevMonth">‹</text>
+    <text class="month-nav__title">{{title}}</text>
+    <text class="month-nav__btn" bindtap="onNextMonth">›</text>
+  </view>
+
+  <view class="stats">
+    <text>本月双人同日 {{bothCount}} 天</text>
+    <text>我单独签到 {{meCount}} 天</text>
+  </view>
+
+  <view class="legend card-soft">
+    <view class="legend__item"><view class="dot dot--both"></view><text>两人都签</text></view>
+    <view class="legend__item"><view class="dot dot--me"></view><text>只有我</text></view>
+    <view class="legend__item"><view class="dot dot--partner"></view><text>只有她</text></view>
+  </view>
+
+  <view class="calendar card-soft">
+    <view class="calendar__week">
+      <text wx:for="{{weekdays}}" wx:key="*this" class="calendar__wd">{{item}}</text>
+    </view>
+    <view class="calendar__grid">
+      <view
+        wx:for="{{cells}}"
+        wx:key="index"
+        class="calendar__cell {{item.empty ? 'is-empty' : ''}} status-{{item.status}}"
+        data-date="{{item.dateKey}}"
+        bindtap="onTapDay">
+        <text wx:if="{{!item.empty}}" class="calendar__day">{{item.day}}</text>
+      </view>
+    </view>
+  </view>
+</view>
+
+<view class="sheet-mask" wx:if="{{detailOpen}}" bindtap="closeDetail"></view>
+<view class="sheet" wx:if="{{detailOpen && detail}}">
+  <view class="sheet__head">
+    <text class="sheet__title serif">{{detail.label}}</text>
+    <text class="sheet__close" bindtap="closeDetail">关闭</text>
+  </view>
+  <view class="sheet__lines">
+    <text wx:for="{{detail.lines}}" wx:key="*this" class="sheet__line">{{item}}</text>
+  </view>
+
+  <pet-float />
+</view>

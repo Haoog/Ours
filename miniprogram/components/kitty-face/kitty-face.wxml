@@ -1,0 +1,19 @@
+<!-- 白猫脸造型（Hello Kitty 式：圆脸、无嘴、蝴蝶结、黄鼻子） -->
+<view class="kitty kitty--{{size}} kitty--{{mood}}">
+  <view class="kitty__bow">
+    <view class="kitty__bow-loop kitty__bow-loop--l"></view>
+    <view class="kitty__bow-knot"></view>
+    <view class="kitty__bow-loop kitty__bow-loop--r"></view>
+  </view>
+  <view class="kitty__head">
+    <view class="kitty__ear kitty__ear--l"></view>
+    <view class="kitty__ear kitty__ear--r"></view>
+    <view class="kitty__eye kitty__eye--l"></view>
+    <view class="kitty__eye kitty__eye--r"></view>
+    <view class="kitty__nose"></view>
+    <view class="kitty__whisker kitty__whisker--l1"></view>
+    <view class="kitty__whisker kitty__whisker--l2"></view>
+    <view class="kitty__whisker kitty__whisker--r1"></view>
+    <view class="kitty__whisker kitty__whisker--r2"></view>
+  </view>
+</view>

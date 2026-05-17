@@ -1,0 +1,15 @@
+---
+description: 本仓库每次 Agent 对话均应用微信小程序开发、联网检索、编码准则与 UI 设计技能
+alwaysApply: true
+---
+
+# 强制技能（全会话）
+
+在本工作区的 **每一次** Agent 对话中：
+
+1. **必须**按 `.cursor/skills/wechat-miniprogram-dev/SKILL.md` 处理所有与代码、配置、提审、调试相关的工作（含 `miniprogram/`、`project.config.json` 等）。
+2. **必须**按 `.cursor/skills/online-search/SKILL.md`：凡涉及微信官方规则、接口/基础库版本、依赖与 CVE、错误码与平台文案等可能随时间变化的信息，**先检索或拉取权威来源再下结论**，不得仅凭训练数据断言。
+3. **必须**按 `.cursor/skills/karpathy-guidelines/SKILL.md` 编写、审查或重构代码：先澄清假设、保持简单、只做与需求直接相关的改动、给出可验证的成功标准。
+4. 涉及页面视觉、组件样式、品牌调性、动效与布局时，**必须**按 `.cursor/skills/frontend-design/SKILL.md` 做设计思考后再实现（在 WXML/WXSS 约束下落地，见该技能「小程序适配」一节）。
+
+若用户问题与小程序或联网无关（例如纯闲聊），仍遵守第 2 条中「平台与依赖类事实需核实」的原则；其余可正常简短回答。

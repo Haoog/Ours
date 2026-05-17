@@ -1,0 +1,69 @@
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 48rpx 32rpx 32rpx;
+  gap: 16rpx;
+}
+
+.hero__title {
+  font-size: 40rpx;
+  color: var(--text);
+}
+
+.hero__sub {
+  font-size: 24rpx;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.5;
+  padding: 0 24rpx;
+}
+
+.setup-tip {
+  margin: 0 32rpx 20rpx;
+  padding: 22rpx 24rpx;
+  font-size: 24rpx;
+  color: var(--c-muted, rgba(74, 68, 88, 0.65));
+  line-height: 1.65;
+}
+
+.form {
+  margin: 24rpx 32rpx;
+  padding: 24rpx;
+}
+
+.field {
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid rgba(139, 126, 200, 0.12);
+}
+
+.field:last-child {
+  border-bottom: none;
+}
+
+.field__label {
+  display: block;
+  font-size: 24rpx;
+  color: var(--text-muted);
+  margin-bottom: 12rpx;
+}
+
+.field__input {
+  font-size: 30rpx;
+  color: var(--text);
+}
+
+.field--picker {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.field__val {
+  font-size: 30rpx;
+  color: var(--accent);
+}
+
+.btn-action {
+  margin: 48rpx 32rpx;
+}

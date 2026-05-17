@@ -1,0 +1,23 @@
+<view class="cpet {{compact ? 'cpet--compact' : ''}} {{large ? 'cpet--large' : ''}} {{bounce ? 'cpet--bounce' : ''}}" wx:if="{{pet && pet.adopted}}">
+  <view class="cpet__scene cpet__scene--{{pet.stage}}">
+    <view class="cpet__floor"></view>
+    <kitty-face size="{{large ? 'lg' : compact ? 'sm' : 'md'}}" mood="{{kittyMood}}" />
+    <view class="cpet__shadow"></view>
+  </view>
+
+  <view class="cpet__meta" wx:if="{{!compact}}">
+    <text class="cpet__name">{{pet.name}}</text>
+    <text class="cpet__lv">Lv.{{pet.level}} · {{pet.stage === 'baby' ? '幼猫' : pet.stage === 'teen' ? '少年猫' : '大猫'}}</text>
+  </view>
+
+  <view class="cpet__bars">
+    <view class="cpet__bar">
+      <text class="cpet__bar-label">心情</text>
+      <view class="cpet__track"><view class="cpet__fill cpet__fill--mood" style="width: {{pet.happiness}}%;"></view></view>
+    </view>
+    <view class="cpet__bar" wx:if="{{!compact}}">
+      <text class="cpet__bar-label">成长</text>
+      <view class="cpet__track"><view class="cpet__fill cpet__fill--exp" style="width: {{pet.expPercent}}%;"></view></view>
+    </view>
+  </view>
+</view>
