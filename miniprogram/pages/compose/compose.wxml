@@ -5,6 +5,7 @@
     </view>
     <text class="head__tag tag tag--accent">记一条</text>
     <text class="head__title serif">写下这一刻</text>
+    <text class="head__sub">可选过去的日期，补录以前的回忆</text>
   </view>
 
   <view class="viewfinder card-soft">
@@ -84,6 +85,12 @@
   </view>
 
   <view class="meta card-soft">
+    <picker mode="date" value="{{momentDate}}" start="{{minMomentDate}}" end="{{maxMomentDate}}" bindchange="onPickMomentDate">
+      <view class="meta__row">
+        <text class="meta__label">回忆日期</text>
+        <text class="meta__val accent">{{momentDateLabel}} →</text>
+      </view>
+    </picker>
     <view class="meta__row" bindtap="onPickLocation">
       <text class="meta__label">地点</text>
       <text class="meta__val">{{location ? location : '选择地点'}}</text>

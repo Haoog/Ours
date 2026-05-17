@@ -81,6 +81,10 @@ export interface Moment {
   authorOpenid: string
   authorRole: 'A' | 'B'
   createdAt: number
+  /** 回忆发生的日期 YYYY-MM-DD，默认同 createdAt 当天 */
+  momentDate?: string
+  /** 列表排序用时间戳（由 momentDate + 发布时间衍生） */
+  sortAt?: number
   tag?: MomentTag
   kind?: MomentKind
   systemKind?: 'checkin' | null

@@ -9,12 +9,42 @@
 
   <view class="cast">
     <view class="cast__card is-you {{role === 'A' ? 'is-current' : ''}}">
-      <text class="cast__badge">我</text>
+      <view
+        class="cast__badge-wrap {{role === 'A' ? 'is-editable' : ''}}"
+        catchtap="onTapAvatar"
+        data-slot="A"
+      >
+        <image
+          wx:if="{{youAvatarSrc}}"
+          class="cast__avatar"
+          src="{{youAvatarSrc}}"
+          mode="aspectFill"
+          catchtap="onTapAvatar"
+          data-slot="A"
+        />
+        <text wx:else class="cast__badge">我</text>
+        <text wx:if="{{role === 'A'}}" class="cast__edit">换</text>
+      </view>
       <text class="cast__name">{{youName}}</text>
       <text class="cast__role">雾蓝紫</text>
     </view>
     <view class="cast__card is-them {{role === 'B' ? 'is-current' : ''}}">
-      <text class="cast__badge">她</text>
+      <view
+        class="cast__badge-wrap {{role === 'B' ? 'is-editable' : ''}}"
+        catchtap="onTapAvatar"
+        data-slot="B"
+      >
+        <image
+          wx:if="{{themAvatarSrc}}"
+          class="cast__avatar"
+          src="{{themAvatarSrc}}"
+          mode="aspectFill"
+          catchtap="onTapAvatar"
+          data-slot="B"
+        />
+        <text wx:else class="cast__badge">她</text>
+        <text wx:if="{{role === 'B'}}" class="cast__edit">换</text>
+      </view>
       <text class="cast__name">{{themName}}</text>
       <text class="cast__role">薰衣草紫</text>
     </view>

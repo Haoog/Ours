@@ -80,14 +80,22 @@ export async function updateStartDate(startDate: string): Promise<Couple> {
 }
 
 export async function updateProfile(input: { nickname: string; avatarUrl?: string }): Promise<Couple> {
-  const couple = await callOurs<Couple>('updateProfile', {
+  const payload: Record<string, string> = {
     coupleId: coupleId(),
     nickname: input.nickname,
-    avatarUrl: input.avatarUrl ?? '',
-  })
+  }
+  if (input.avatarUrl !== undefined) payload.avatarUrl = input.avatarUrl
+  const couple = await callOurs<Couple>('updateProfile', payload)
   const s = requireSession()
   s.couple = couple
   return couple
+}
+
+export async function uploadAvatar(localPath: string): Promise<string> {
+  const cid = coupleId()
+  const ext = fileExt(localPath, 'jpg')
+  const cloudPath = `avatars/${cid}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
+  return uploadOne(localPath, cloudPath)
 }
 
 export async function clearAll(): Promise<void> {
@@ -359,6 +367,7 @@ export async function addMoment(
     voices?: { path: string; duration: number }[]
     location: MomentLocation | null
     tag?: MomentTag | ''
+    momentDate?: string
   },
   onProgress?: UploadProgressFn,
 ): Promise<Moment> {
@@ -407,6 +416,7 @@ export async function addMoment(
     voices,
     location: input.location,
     tag: input.tag ?? '',
+    momentDate: input.momentDate,
   })
   tick(100, '完成')
   return moment

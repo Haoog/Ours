@@ -29,6 +29,34 @@ function daysBetween(startISO, end = new Date()) {
   return Math.max(0, Math.floor(ms / 86400000)) + 1
 }
 
+function dateKeyFromTs(ts) {
+  return todayKey(new Date(ts))
+}
+
+function sortAtForMomentDate(momentDate, createdAt) {
+  const base = new Date(`${momentDate}T12:00:00`).getTime()
+  return base + Math.min((createdAt || Date.now()) % 60000, 59999)
+}
+
+function normalizeMomentFields(doc) {
+  if (!doc) return doc
+  const createdAt = doc.createdAt || Date.now()
+  const momentDate = doc.momentDate || dateKeyFromTs(createdAt)
+  const sortAt = doc.sortAt || sortAtForMomentDate(momentDate, createdAt)
+  return { ...doc, createdAt, momentDate, sortAt }
+}
+
+function resolveMomentDate(payload, couple) {
+  const raw = (payload.momentDate || todayKey()).trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) throw new Error('日期格式不正确')
+  const today = todayKey()
+  if (raw > today) throw new Error('回忆日期不能晚于今天')
+  if (couple.startDate && raw < couple.startDate) {
+    throw new Error('回忆日期不能早于「在一起」开始日')
+  }
+  return raw
+}
+
 function bothRolesOn(checkins) {
   const roles = new Set(checkins.map(c => c.role))
   return roles.has('A') && roles.has('B')
@@ -387,7 +415,8 @@ async function enrichMomentsList(items, coupleId, role) {
   const previewIds = []
   for (const m of items) previewIds.push(...pickPreviewFileIDs(m))
   const urlMap = await resolveFileUrls([...new Set([...previewIds, ...items.map(pickCoverFileID)])].filter(Boolean))
-  return items.map(m => {
+  return items.map(raw => {
+    const m = normalizeMomentFields(raw)
     const coverId = pickCoverFileID(m)
     const coverUrl =
       coverId && coverId.startsWith('cloud://') ? urlMap[coverId] || '' : coverId || ''
@@ -420,14 +449,14 @@ async function queryMomentsPage(openid, payload, withKeyword) {
     const res = await db
       .collection('moments')
       .where(where)
-      .orderBy('createdAt', 'desc')
+      .orderBy('sortAt', 'desc')
       .skip(skip)
       .limit(fetchSize)
       .get()
     const raw = res.data
       .map(m => {
         const { _id, ...rest } = m
-        return { id: _id, ...rest }
+        return normalizeMomentFields({ id: _id, ...rest })
       })
       .filter(m => passesMediaFilter(m, mediaFilter))
     const slice = raw.slice(0, pageSize)
@@ -444,7 +473,7 @@ async function queryMomentsPage(openid, payload, withKeyword) {
     db
       .collection('moments')
       .where(where)
-      .orderBy('createdAt', 'desc')
+      .orderBy('sortAt', 'desc')
       .skip(skip)
       .limit(pageSize)
       .get(),
@@ -452,7 +481,7 @@ async function queryMomentsPage(openid, payload, withKeyword) {
   const total = countRes.total || 0
   const raw = res.data.map(m => {
     const { _id, ...rest } = m
-    return { id: _id, ...rest }
+    return normalizeMomentFields({ id: _id, ...rest })
   })
   const items = await enrichMomentsList(raw, coupleId, role)
   return {
@@ -479,16 +508,18 @@ async function getOnThisDay(openid, payload = {}) {
   const { role } = await requireMember(openid, coupleId)
   const now = new Date()
   const md = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  const res = await db.collection('moments').where({ coupleId }).orderBy('createdAt', 'desc').limit(300).get()
+  const res = await db.collection('moments').where({ coupleId }).orderBy('sortAt', 'desc').limit(300).get()
   const filtered = res.data
     .filter(m => {
-      const d = new Date(m.createdAt)
-      const key = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      return key === md && m.kind !== 'system'
+      if (m.kind === 'system') return false
+      const norm = normalizeMomentFields(m)
+      const parts = norm.momentDate.split('-')
+      const key = `${parts[1]}-${parts[2]}`
+      return key === md
     })
     .map(m => {
       const { _id, ...rest } = m
-      return { id: _id, ...rest }
+      return normalizeMomentFields({ id: _id, ...rest })
     })
   const items = await enrichMomentsList(filtered, coupleId, role)
   return items
@@ -503,11 +534,15 @@ async function getMomentsStats(openid, payload = {}) {
   let list = res.data.filter(doc => doc.kind !== 'system')
   if (m >= 1 && m <= 12) {
     list = list.filter(doc => {
-      const d = new Date(doc.createdAt)
-      return d.getFullYear() === y && d.getMonth() + 1 === m
+      const norm = normalizeMomentFields(doc)
+      const parts = norm.momentDate.split('-')
+      return Number(parts[0]) === y && Number(parts[1]) === m
     })
   } else {
-    list = list.filter(doc => new Date(doc.createdAt).getFullYear() === y)
+    list = list.filter(doc => {
+      const norm = normalizeMomentFields(doc)
+      return Number(norm.momentDate.split('-')[0]) === y
+    })
   }
   const tagCount = { daily: 0, travel: 0, rant: 0, '': 0 }
   const places = new Set()
@@ -571,7 +606,7 @@ async function getMomentNeighbors(openid, payload = {}) {
   const res = await db
     .collection('moments')
     .where(where)
-    .orderBy('createdAt', 'desc')
+    .orderBy('sortAt', 'desc')
     .field({ _id: true })
     .limit(500)
     .get()
@@ -607,16 +642,19 @@ async function getMoment(openid, payload = {}) {
   const m = res.data
   if (!m || m.coupleId !== coupleId) return null
   const { _id, ...rest } = m
-  return { id: _id, ...rest }
+  return normalizeMomentFields({ id: _id, ...rest })
 }
 
 async function addMoment(openid, payload = {}) {
-  const { coupleId, content, images, videos, livePhotos, voices, location, tag } = payload
-  const { role } = await requireMember(openid, coupleId)
+  const { coupleId, content, images, videos, livePhotos, voices, location, tag, momentDate: rawDate } =
+    payload
+  const { couple, role } = await requireMember(openid, coupleId)
   await assertTextSafe(openid, content, '文字')
   const allowed = ['', 'daily', 'travel', 'rant']
   const momentTag = allowed.includes(tag) ? tag : ''
-  const data = {
+  const createdAt = Date.now()
+  const momentDate = resolveMomentDate({ momentDate: rawDate }, couple)
+  const data = normalizeMomentFields({
     coupleId,
     kind: 'post',
     systemKind: null,
@@ -629,8 +667,10 @@ async function addMoment(openid, payload = {}) {
     tag: momentTag,
     authorOpenid: openid,
     authorRole: role,
-    createdAt: Date.now(),
-  }
+    createdAt,
+    momentDate,
+    sortAt: sortAtForMomentDate(momentDate, createdAt),
+  })
   const res = await db.collection('moments').add({ data })
   await grantPetExp(coupleId, 12)
   return { id: res._id, ...data }
@@ -660,6 +700,8 @@ async function insertCheckinSystemMoment(coupleId, date, streakDays) {
       authorOpenid: 'system',
       authorRole: 'A',
       createdAt: Date.now(),
+      momentDate: date,
+      sortAt: sortAtForMomentDate(date, Date.now()),
       meta: { date, streakDays },
     },
   })
@@ -1308,6 +1350,8 @@ async function seedDemoData(openid, payload = {}) {
         authorOpenid,
         authorRole,
         createdAt: d.getTime(),
+        momentDate: todayKey(d),
+        sortAt: sortAtForMomentDate(todayKey(d), d.getTime()),
       },
     })
     momentCount++
@@ -1331,6 +1375,8 @@ async function seedDemoData(openid, payload = {}) {
       authorOpenid: openid,
       authorRole: role,
       createdAt: otd.getTime(),
+      momentDate: todayKey(otd),
+      sortAt: sortAtForMomentDate(todayKey(otd), otd.getTime()),
     },
   })
   momentCount++

@@ -15,7 +15,13 @@
 
   <view class="reels {{bothToday ? 'clap' : ''}}">
     <view class="reel-card reel-card--you {{youChecked ? 'is-on' : ''}}" bindtap="onTapYou">
-      <view class="reel-card__avatar">我</view>
+      <image
+        wx:if="{{youAvatarSrc}}"
+        class="reel-card__avatar-img"
+        src="{{youAvatarSrc}}"
+        mode="aspectFill"
+      />
+      <view wx:else class="reel-card__avatar">我</view>
       <view class="reel-card__name">{{youLabel}}</view>
       <view class="reel-card__state">{{youChecked ? '已签到' : '签到'}}</view>
     </view>
@@ -23,7 +29,13 @@
       <kitty-face size="sm" mood="{{bothToday ? 'awake' : 'dim'}}" />
     </view>
     <view class="reel-card reel-card--them {{themChecked ? 'is-on' : ''}}" bindtap="onTapThem">
-      <view class="reel-card__avatar">她</view>
+      <image
+        wx:if="{{themAvatarSrc}}"
+        class="reel-card__avatar-img"
+        src="{{themAvatarSrc}}"
+        mode="aspectFill"
+      />
+      <view wx:else class="reel-card__avatar">她</view>
       <view class="reel-card__name">{{themLabel}}</view>
       <view class="reel-card__state">{{themChecked ? '已签到' : '签到'}}</view>
     </view>

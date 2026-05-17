@@ -1,6 +1,8 @@
 // pages/compose/compose.ts —— 发布动态（图文 / 视频 / 语音 / 实况）
 
-import { addMoment, getIdentity } from '../../services/store'
+import { addMoment, getCouple, getIdentity } from '../../services/store'
+import { todayKey } from '../../services/date'
+import { formatMomentDateLabel } from '../../utils/moment-time'
 import { ensureCloudReady } from '../../services/page-boot'
 import { getAppInstance } from '../../app'
 import { MomentLocation, MomentTag } from '../../services/types'
@@ -42,6 +44,10 @@ Page({
     isIOS: false,
     tagList: MOMENT_TAG_POST,
     tagSelected: 'daily' as MomentTag,
+    momentDate: todayKey(),
+    momentDateLabel: '今天',
+    minMomentDate: '1970-01-01',
+    maxMomentDate: todayKey(),
   },
 
   recorder: null as WechatMiniprogram.RecorderManager | null,
@@ -51,10 +57,16 @@ Page({
     await getAppInstance().waitBoot()
     if (!(await ensureCloudReady())) return
     const id = getIdentity()
+    const couple = getCouple()
     const sys = wx.getSystemInfoSync()
+    const momentDate = todayKey()
     this.setData({
       role: id.role,
       isIOS: (sys.platform || '').toLowerCase() === 'ios',
+      momentDate,
+      momentDateLabel: formatMomentDateLabel(momentDate),
+      minMomentDate: couple?.startDate ?? '1970-01-01',
+      maxMomentDate: momentDate,
     })
     this.initRecorder()
   },
@@ -383,6 +395,14 @@ Page({
     this.setData({ tagSelected: key })
   },
 
+  onPickMomentDate(e: WechatMiniprogram.PickerChange) {
+    const momentDate = String(e.detail.value)
+    this.setData({
+      momentDate,
+      momentDateLabel: formatMomentDateLabel(momentDate),
+    })
+  },
+
   onCancel() {
     wx.navigateBack().catch(() => {
       wx.switchTab({ url: '/pages/moments/moments' })
@@ -414,6 +434,7 @@ Page({
           voices: this.data.voice ? [this.data.voice] : [],
         location: this.data.locationFull,
         tag: this.data.tagSelected,
+        momentDate: this.data.momentDate,
       },
         (percent, hint) => {
           this.setData({ uploadProgress: percent, uploadHint: hint })

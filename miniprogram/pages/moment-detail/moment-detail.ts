@@ -16,6 +16,7 @@ import { MomentTag } from '../../services/types'
 import { ensureCloudReady } from '../../services/page-boot'
 import { getAppInstance } from '../../app'
 import { formatSlate } from '../../services/format'
+import { momentDisplayAt, isBackdatedMoment } from '../../utils/moment-time'
 import { MomentLivePhoto, MomentComment } from '../../services/types'
 import { tagLabel } from '../../utils/tags'
 import { resolveMomentImages, resolveMomentLivePhotos, toDisplayUrl } from '../../utils/media-url'
@@ -91,9 +92,12 @@ Page({
         return
       }
       const isSystem = m.kind === 'system'
-      const slate = formatSlate(m.createdAt)
+      const displayAt = momentDisplayAt(m)
+      const slate = formatSlate(displayAt)
       const d = new Date(m.createdAt)
-      const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+      const time = isBackdatedMoment(m)
+        ? '补记'
+        : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 
       const images = isSystem ? [] : await resolveMomentImages(m.images)
       const livePhotos = isSystem ? [] : await resolveMomentLivePhotos(m.livePhotos ?? [])

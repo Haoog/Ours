@@ -2,6 +2,7 @@ import { daysBetween } from '../services/date'
 import { Moment } from '../services/types'
 import { formatSlate } from '../services/format'
 import { tagLabel } from './tags'
+import { momentDisplayAt, momentDateOf } from './moment-time'
 
 export type SceneLayout = 'signal' | 'verse' | 'cinema' | 'collage' | 'reel'
 
@@ -62,7 +63,7 @@ function momentToScene(
   sceneNo: string,
   stagger: 'a' | 'b',
 ): SceneVO {
-  const slate = formatSlate(m.createdAt)
+  const slate = formatSlate(momentDisplayAt(m))
   const imageCount = m.images?.length || m.livePhotos?.length || 0
   let previewImages = m.previewImages?.length
     ? m.previewImages.slice(0, 9)
@@ -115,13 +116,13 @@ function collectMilestones(
 ): { key: string; title: string; sub: string }[] {
   const out: { key: string; title: string; sub: string }[] = []
   if (m.kind === 'system') return out
-  const days = daysBetween(startDate, new Date(m.createdAt))
+  const days = daysBetween(startDate, new Date(momentDisplayAt(m)))
   for (const target of RELATION_MILESTONES) {
     if (days === target) {
       out.push({
         key: `rel-${target}-${m.id}`,
         title: `在一起 ${target} 天`,
-        sub: formatSlate(m.createdAt).md,
+        sub: formatSlate(momentDisplayAt(m)).md,
       })
     }
   }
@@ -152,8 +153,9 @@ export function buildTimelineRows(
     const postNumber = total - globalIdx
     const sceneNo = String(total - globalIdx).padStart(2, '0')
     const stagger: 'a' | 'b' = globalIdx % 2 === 0 ? 'a' : 'b'
-    const d = new Date(m.createdAt)
-    const mk = `${d.getFullYear()}-${d.getMonth() + 1}`
+    const parts = momentDateOf(m).split('-')
+    const mk = `${parts[0]}-${Number(parts[1])}`
+    const d = new Date(momentDisplayAt(m))
     if (mk !== lastMonth) {
       lastMonth = mk
       rows.push({ type: 'month', key: `m-${mk}`, label: `${d.getFullYear()} · ${d.getMonth() + 1} 月` })

@@ -10,7 +10,8 @@ import {
   getNextAnniversary,
 } from '../../services/store'
 import { ensureCloudReady, handleInviteQuery } from '../../services/page-boot'
-import { pickMomentCover } from '../../utils/media-url'
+import { pickMomentCover, toDisplayUrl } from '../../utils/media-url'
+import { momentDisplayAt } from '../../utils/moment-time'
 import { getAppInstance } from '../../app'
 import { formatSlate } from '../../services/format'
 import { Moment, Mood } from '../../services/types'
@@ -46,6 +47,8 @@ Page({
     streak: 0,
     youLabel: '你',
     themLabel: 'TA',
+    youAvatarSrc: '',
+    themAvatarSrc: '',
     recent: [] as RecentVO[],
     hasRecent: false,
     checkinOpen: false,
@@ -80,7 +83,8 @@ Page({
         getNextAnniversary(),
       ])
 
-      const myRole = getIdentity().role
+      const identity = getIdentity()
+      const myRole = identity.role
       const partnerRole = myRole === 'A' ? 'B' : 'A'
       const checkins = checkinState.checkins
       const youChecked = checkins.some(c => c.role === myRole)
@@ -89,7 +93,7 @@ Page({
 
       const recent: RecentVO[] = await Promise.all(
         moments.slice(0, 3).map(async (m: Moment) => {
-          const slate = formatSlate(m.createdAt)
+          const slate = formatSlate(momentDisplayAt(m))
           const cover = await pickMomentCover(m)
           const tags: string[] = []
           if (m.images.length) tags.push(`${m.images.length}图`)
@@ -111,6 +115,11 @@ Page({
         }),
       )
 
+      const [youAvatarSrc, themAvatarSrc] = await Promise.all([
+        toDisplayUrl(couple.memberA.avatarUrl),
+        toDisplayUrl(couple.memberB?.avatarUrl ?? ''),
+      ])
+
       this.setData({
         ready: true,
         bound: !!couple.memberB,
@@ -121,6 +130,8 @@ Page({
         streak: checkinState.streakDays,
         youLabel: couple.memberA.nickname || '你',
         themLabel: couple.memberB?.nickname || '她',
+        youAvatarSrc,
+        themAvatarSrc,
         recent,
         hasRecent: recent.length > 0,
         nextAnn: nextAnn ? { title: nextAnn.title, label: nextAnn.label } : null,

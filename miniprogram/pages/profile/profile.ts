@@ -9,6 +9,8 @@ import {
   clearAll,
   getPet,
 } from '../../services/store'
+import { toDisplayUrl } from '../../utils/media-url'
+import { changeAvatarForSlot } from '../../utils/avatar'
 import { ensureCloudReady } from '../../services/page-boot'
 import { bootstrapSession } from '../../services/session'
 import { getAppInstance } from '../../app'
@@ -17,6 +19,8 @@ Page({
   data: {
     youName: '你',
     themName: 'TA',
+    youAvatarSrc: '',
+    themAvatarSrc: '',
     startDate: '',
     days: 0,
     role: 'A' as 'A' | 'B',
@@ -44,9 +48,15 @@ Page({
     } catch {
       /* ignore */
     }
+    const [youAvatarSrc, themAvatarSrc] = await Promise.all([
+      toDisplayUrl(couple.memberA.avatarUrl),
+      toDisplayUrl(couple.memberB?.avatarUrl ?? ''),
+    ])
     this.setData({
       youName: couple.memberA.nickname,
       themName: couple.memberB?.nickname ?? '尚未加入',
+      youAvatarSrc,
+      themAvatarSrc,
       startDate: couple.startDate,
       days: daysBetween(couple.startDate),
       role: id.role,
@@ -56,16 +66,24 @@ Page({
     })
   },
 
+  onTapAvatar(e: WechatMiniprogram.TouchEvent) {
+    const slot = e.currentTarget.dataset.slot as 'A' | 'B'
+    void changeAvatarForSlot(slot, this.data.role).then(ok => {
+      if (ok) void this.refresh()
+    })
+  },
+
   onTapPet() {
     wx.navigateTo({ url: '/pages/pet/pet' })
   },
 
   onEditNickname() {
+    const { nickname } = getIdentity()
     wx.showModal({
       title: '修改昵称',
       editable: true,
       placeholderText: '你的昵称',
-      content: this.data.youName,
+      content: nickname,
       success: async res => {
         if (!res.confirm || !res.content) return
         const nickname = res.content.trim()

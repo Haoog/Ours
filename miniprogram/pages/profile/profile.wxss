@@ -44,19 +44,54 @@
   border-color: var(--c-accent-soft);
   box-shadow: 0 8rpx 28rpx rgba(110, 98, 168, 0.18);
 }
-.cast__badge {
-  width: 52rpx;
-  height: 52rpx;
+.cast__badge-wrap {
+  position: relative;
+  width: 88rpx;
+  height: 88rpx;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24rpx;
+}
+.cast__badge-wrap.is-editable:active {
+  opacity: 0.88;
+}
+.cast__badge {
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30rpx;
   color: #fff;
   font-weight: 600;
 }
+.cast__avatar {
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 50%;
+  display: block;
+}
 .is-you .cast__badge { background: linear-gradient(160deg, var(--c-you), #6A7AA8); }
 .is-them .cast__badge { background: linear-gradient(160deg, var(--c-them), #7E70B5); }
+.is-you .cast__avatar { border: 3rpx solid var(--c-you); box-sizing: border-box; }
+.is-them .cast__avatar { border: 3rpx solid var(--c-them); box-sizing: border-box; }
+.cast__edit {
+  position: absolute;
+  right: -2rpx;
+  bottom: -2rpx;
+  width: 32rpx;
+  height: 32rpx;
+  border-radius: 50%;
+  background: var(--c-accent);
+  color: #fff;
+  font-size: 18rpx;
+  line-height: 32rpx;
+  text-align: center;
+  font-weight: 600;
+  box-shadow: 0 4rpx 12rpx rgba(110, 98, 168, 0.35);
+}
 .cast__name {
   font-size: 28rpx;
   color: var(--c-text);

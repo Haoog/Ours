@@ -23,6 +23,11 @@
   color: var(--c-text);
   font-weight: 600;
 }
+.head__sub {
+  font-size: 24rpx;
+  color: var(--c-muted);
+  line-height: 1.5;
+}
 
 .viewfinder {
   padding: 28rpx;
@@ -233,6 +238,10 @@
 }
 .meta__row:last-child { border-bottom: none; }
 .meta__label { font-size: 28rpx; color: var(--c-muted); }
+.meta__val.accent {
+  color: var(--c-accent-deep);
+  font-weight: 500;
+}
 .meta__val {
   font-size: 28rpx;
   color: var(--c-text);
