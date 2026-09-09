@@ -1,9 +1,9 @@
 <view class="page grain" wx:if="{{ready}}">
   <view class="hero fade-in">
     <view class="hero__cat">
-      <kitty-face size="lg" mood="{{bothToday ? 'awake' : 'dim'}}" />
+      <kitty-face size="lg" mood="awake" />
     </view>
-    <view class="hero__brand tag tag--accent">Ours · 我们的空间</view>
+    <view class="hero__brand tag tag--accent">我们的空间</view>
     <view class="hero__day">
       <text class="hero__day-label">在一起第</text>
       <text class="hero__day-num serif">{{days}}</text>
@@ -13,35 +13,14 @@
     <text class="hero__paw cat-paw">····· 🐾 ·····</text>
   </view>
 
-  <view class="reels {{bothToday ? 'clap' : ''}}">
-    <view class="reel-card reel-card--you {{youChecked ? 'is-on' : ''}}" bindtap="onTapYou">
-      <image
-        wx:if="{{youAvatarSrc}}"
-        class="reel-card__avatar-img"
-        src="{{youAvatarSrc}}"
-        mode="aspectFill"
-      />
-      <view wx:else class="reel-card__avatar">我</view>
-      <view class="reel-card__name">{{youLabel}}</view>
-      <view class="reel-card__state">{{youChecked ? '已签到' : '签到'}}</view>
+  <view class="memory-prompt card-soft" hover-class="u-press" bindtap="onTapCompose">
+    <view class="memory-prompt__icon">✦</view>
+    <view class="memory-prompt__copy">
+      <text class="memory-prompt__title">今天，也可以留下一点什么</text>
+      <text class="memory-prompt__sub">一句话、一张照片，或者一段视频</text>
     </view>
-    <view class="reels__cat">
-      <kitty-face size="sm" mood="{{bothToday ? 'awake' : 'dim'}}" />
-    </view>
-    <view class="reel-card reel-card--them {{themChecked ? 'is-on' : ''}}" bindtap="onTapThem">
-      <image
-        wx:if="{{themAvatarSrc}}"
-        class="reel-card__avatar-img"
-        src="{{themAvatarSrc}}"
-        mode="aspectFill"
-      />
-      <view wx:else class="reel-card__avatar">她</view>
-      <view class="reel-card__name">{{themLabel}}</view>
-      <view class="reel-card__state">{{themChecked ? '已签到' : '签到'}}</view>
-    </view>
+    <text class="memory-prompt__action">记录 →</text>
   </view>
-
-  <view class="streak" bindtap="onTapStreak">连续双人签到 · {{streak}} 天 · 查看记录 →</view>
 
   <view class="ann card-soft" wx:if="{{nextAnn}}" bindtap="onTapAnniversary">
     <text class="ann__label">下个纪念日</text>
@@ -51,20 +30,43 @@
 
   <view class="recent">
     <view class="recent__heading">
-      <text class="recent__title">最近记录</text>
+      <view class="recent__heading-copy">
+        <text class="recent__title">最近记录</text>
+        <text wx:if="{{recent.length > 1}}" class="recent__hint">左右滑动查看更多</text>
+      </view>
       <view class="recent__more" bindtap="onTapMoments">全部回忆 →</view>
     </view>
 
-    <view wx:if="{{hasRecent}}" class="recent__list">
-      <view class="recent__row" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" bindtap="onTapMoment">
-        <view class="recent__thumb">
-          <image wx:if="{{item.cover}}" class="recent__img" src="{{item.cover}}" mode="aspectFill"></image>
-          <view wx:else class="recent__placeholder">{{item.mediaTag || item.caption || '…'}}</view>
+    <scroll-view wx:if="{{hasRecent}}" class="recent__scroller" scroll-x enhanced show-scrollbar="{{false}}">
+      <view class="recent__track">
+        <view class="recent-card" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" hover-class="u-press" bindtap="onTapMoment">
+          <view class="recent-card__media">
+            <image wx:if="{{item.cover}}" class="recent-card__image" src="{{item.cover}}" mode="aspectFill" lazy-load="true"></image>
+            <view wx:else class="recent-card__placeholder {{item.hasVideo ? 'recent-card__placeholder--video' : ''}}">
+              <text wx:if="{{item.hasVideo}}" class="recent-card__placeholder-icon">▶</text>
+              <text>{{item.hasVideo ? '视频记录' : item.mediaTag || item.caption || '…'}}</text>
+            </view>
+            <view wx:if="{{item.hasVideo}}" class="recent-card__media-badge">视频</view>
+            <view wx:if="{{item.cover && item.hasVideo}}" class="recent-card__play">▶</view>
+          </view>
+          <view class="recent-card__body">
+            <text class="recent-card__date">{{item.md}} · {{item.dow}}</text>
+            <text class="recent-card__caption">{{item.caption || '（无文字）'}}</text>
+            <view class="recent-card__foot">
+              <text class="recent-card__who role-{{item.role === 'A' ? 'you' : 'them'}}">{{item.authorLabel}}</text>
+              <text class="recent-card__open">查看回忆 →</text>
+            </view>
+          </view>
         </view>
-        <view class="recent__meta">
-          <text class="recent__date">{{item.md}} · {{item.dow}}</text>
-          <text class="recent__caption">{{item.caption || '（无文字）'}}</text>
-          <text class="recent__who role-{{item.role === 'A' ? 'you' : 'them'}}">{{item.authorLabel}}</text>
+      </view>
+    </scroll-view>
+
+    <view wx:elif="{{!recentLoaded}}" class="recent__skeleton">
+      <view class="rsk-row" wx:for="{{[1,2,3]}}" wx:key="*this">
+        <view class="rsk-thumb"></view>
+        <view class="rsk-meta">
+          <view class="rsk-line rsk-line--sm"></view>
+          <view class="rsk-line"></view>
         </view>
       </view>
     </view>
@@ -79,44 +81,12 @@
   <view class="hero__bind" wx:if="{{!bound}}">
     <view class="bind-card" bindtap="onTapBind">
       <text class="bind-card__title">邀请她加入</text>
-      <text class="bind-card__sub">她打开小程序即可加入，或分享卡片</text>
+      <text class="bind-card__sub">生成专属邀请链接，分享给她即可加入</text>
     </view>
   </view>
 
-  <view class="fab" bindtap="onTapCompose">
+  <view class="fab" hover-class="u-press" bindtap="onTapCompose">
     <view class="fab-sticker">+</view>
-  </view>
-
-  <view class="sheet-mask" wx:if="{{checkinOpen}}" bindtap="closeCheckin"></view>
-  <view class="sheet" wx:if="{{checkinOpen}}">
-    <view class="sheet__head">
-      <text class="sheet__title serif">今日签到</text>
-      <text class="sheet__close" bindtap="closeCheckin">关闭</text>
-    </view>
-
-    <view class="moods">
-      <view
-        wx:for="{{moodList}}"
-        wx:key="key"
-        class="mood {{moodSelected === item.key ? 'is-on' : ''}}"
-        data-key="{{item.key}}"
-        bindtap="onPickMood">
-        <text class="mood__name">{{item.name}}</text>
-      </view>
-    </view>
-
-    <textarea
-      class="sheet__note"
-      placeholder="写一句今天的心情（可选）"
-      placeholder-style="color: rgba(74,68,88,0.35)"
-      maxlength="60"
-      value="{{noteDraft}}"
-      bindinput="onNoteInput"
-      auto-height />
-
-    <view class="sheet__actions">
-      <view class="sticker-send" bindtap="onSubmitCheckin">完成签到</view>
-    </view>
   </view>
 
   <pet-float />

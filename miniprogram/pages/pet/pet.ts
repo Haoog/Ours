@@ -36,15 +36,20 @@ Page({
   },
 
   async onAdopt() {
+    if (this.data.acting) return
     const name = this.data.nameDraft.trim() || '小咪'
+    this.setData({ acting: true })
     try {
       const pet = await adoptPet(name)
+      wx.vibrateShort({ type: 'light' })
       wx.showToast({ title: '小猫到家啦', icon: 'success' })
       this.setData({ pet })
       getAppInstance().bumpPet()
     } catch (err) {
       const msg = err instanceof Error ? err.message : '领养失败'
       wx.showToast({ title: msg, icon: 'none' })
+    } finally {
+      this.setData({ acting: false })
     }
   },
 
@@ -54,6 +59,7 @@ Page({
     this.setData({ acting: true })
     try {
       const pet = await petInteract(action)
+      wx.vibrateShort({ type: 'light' })
       wx.showToast({
         title: action === 'feed' ? '喂食成功' : '抚摸成功',
         icon: 'success',

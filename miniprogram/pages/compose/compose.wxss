@@ -40,12 +40,6 @@
   font-size: 30rpx;
   line-height: 1.65;
 }
-.viewfinder__count {
-  position: absolute;
-  right: 24rpx;
-  bottom: 18rpx;
-}
-
 .media-hint {
   display: block;
   text-align: center;
@@ -304,4 +298,13 @@
   font-size: 22rpx;
   color: var(--c-accent-deep);
   text-align: center;
+}
+.upload-panel__cancel {
+  margin-top: 8rpx;
+  align-self: center;
+  padding: 12rpx 36rpx;
+  font-size: 24rpx;
+  color: var(--c-muted);
+  border: 1rpx solid var(--c-divider);
+  border-radius: var(--r-pill);
 }

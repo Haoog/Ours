@@ -23,8 +23,8 @@
     </view>
   </view>
 
-  <button open-type="share" class="share-btn">分享给她</button>
-  <text class="note cat-paw">🐾 她（{{partnerHint}}）也可直接打开小程序自动加入；分享卡片同样有效</text>
+  <button open-type="share" class="share-btn" disabled="{{!inviteReady}}">分享给她</button>
+  <text class="note cat-paw">🐾 邀请链接有效期为 7 天，且只能连接一位成员</text>
 
   <pet-float />
 </view>

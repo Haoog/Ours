@@ -1,0 +1,10 @@
+{
+  "name": "ours-admin-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ours 网页管理台云函数",
+  "main": "index.js",
+  "dependencies": {
+    "@cloudbase/node-sdk": "^2.9.1"
+  }
+}

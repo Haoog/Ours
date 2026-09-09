@@ -15,7 +15,7 @@
     </view>
 
     <view class="tips card-soft">
-      <text class="tips__line">· 记动态、双人签到都会让小猫成长</text>
+      <text class="tips__line">· 记录回忆会让小猫成长</text>
       <text class="tips__line">· 每天可喂食、抚摸各一次（两人共享）</text>
       <text class="tips__line">· 太久不喂，小猫心情会慢慢下降</text>
     </view>
@@ -23,10 +23,12 @@
     <view class="actions">
       <view
         class="pet-sticker pet-sticker--feed {{pet.canFeed ? '' : 'is-off'}}"
+        hover-class="u-press"
         data-action="feed"
         bindtap="onInteract">🍙 喂食</view>
       <view
         class="pet-sticker pet-sticker--pet {{pet.canPet ? '' : 'is-off'}}"
+        hover-class="u-press"
         data-action="pet"
         bindtap="onInteract">🤍 抚摸</view>
     </view>
@@ -44,14 +46,13 @@
       <text class="name-box__label">给它起个名字</text>
       <input
         class="name-box__input"
-        maxlength="8"
         placeholder="例如：小咪"
         value="{{nameDraft}}"
         bindinput="onNameInput" />
     </view>
 
     <view class="actions">
-      <view class="pet-sticker pet-sticker--adopt" bindtap="onAdopt">领养小猫</view>
+      <view class="pet-sticker pet-sticker--adopt" hover-class="u-press" bindtap="onAdopt">领养小猫</view>
     </view>
   </block>
 </view>

@@ -130,8 +130,8 @@ function collectMilestones(
     if (postNumber === n) {
       out.push({
         key: `post-${n}-${m.id}`,
-        title: `第 ${n} 条片段`,
-        sub: '值得留在卷轴里',
+        title: `第 ${n} 条回忆`,
+        sub: '值得一直记住',
       })
     }
   }

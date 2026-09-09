@@ -3,7 +3,7 @@
 import { callOurs } from './cloud-api'
 import { Couple } from './types'
 
-export type SessionStatus = 'ready' | 'needsSetup'
+export type SessionStatus = 'ready' | 'needsInviteCode' | 'expired' | 'suspended' | 'revoked'
 
 export interface Session {
   status: SessionStatus
@@ -13,10 +13,36 @@ export interface Session {
   coupleId: string | null
 }
 
-let cached: Session | null = null
+const SESSION_STORAGE_KEY = 'OURS_SESSION_V1'
+
+/** 仅持久化 ready 态会话，用于冷启动乐观渲染（数据会在 bootstrap 后被刷新覆盖） */
+function persist(session: Session | null): void {
+  try {
+    if (session && session.status === 'ready' && session.coupleId) {
+      wx.setStorageSync(SESSION_STORAGE_KEY, session)
+    } else {
+      wx.removeStorageSync(SESSION_STORAGE_KEY)
+    }
+  } catch (e) {}
+}
+
+function loadPersisted(): Session | null {
+  try {
+    const s = wx.getStorageSync(SESSION_STORAGE_KEY)
+    if (s && s.status === 'ready' && s.coupleId && s.couple) return s as Session
+  } catch (e) {}
+  return null
+}
+
+let cached: Session | null = loadPersisted()
 
 export function getSession(): Session | null {
   return cached
+}
+
+/** 供数据层在原地修改 couple 后回写本地缓存 */
+export function persistSession(): void {
+  persist(cached)
 }
 
 export function requireSession(): Session {
@@ -31,7 +57,7 @@ export function coupleId(): string {
 }
 
 export async function bootstrapSession(opts?: {
-  inviteCoupleId?: string
+  inviteToken?: string
   nickname?: string
   avatarUrl?: string
 }): Promise<Session> {
@@ -41,7 +67,7 @@ export async function bootstrapSession(opts?: {
     role?: 'A' | 'B'
     couple?: Couple
   }>('bootstrap', {
-    inviteCoupleId: opts?.inviteCoupleId ?? '',
+    inviteToken: opts?.inviteToken ?? '',
     nickname: opts?.nickname ?? '',
     avatarUrl: opts?.avatarUrl ?? '',
   })
@@ -56,22 +82,24 @@ export async function bootstrapSession(opts?: {
     }
   } else {
     cached = {
-      status: 'needsSetup',
+      status: data.status,
       openid: data.openid,
-      role: 'A',
-      couple: null,
-      coupleId: null,
+      role: data.role ?? 'A',
+      couple: data.couple ?? null,
+      coupleId: data.couple?.id ?? null,
     }
   }
+  persist(cached)
   return cached
 }
 
-export async function createCoupleAndCache(input: {
+export async function redeemAccessCodeAndCache(input: {
+  code: string
   startDate: string
   nickname: string
   avatarUrl?: string
 }): Promise<Session> {
-  const couple = await callOurs<Couple>('createCouple', input)
+  const couple = await callOurs<Couple>('redeemAccessCode', input)
   cached = {
     status: 'ready',
     openid: cached?.openid ?? '',
@@ -79,9 +107,9 @@ export async function createCoupleAndCache(input: {
     couple,
     coupleId: couple.id,
   }
+  persist(cached)
   return cached
 }
 
-export function clearSessionCache(): void {
-  cached = null
-}
+/** 旧名称保留给其它开发期代码，正式入口统一走邀请码兑换。 */
+export const createCoupleAndCache = redeemAccessCodeAndCache

@@ -1,120 +1,159 @@
 <view class="page grain">
   <view class="head fade-in">
-    <view class="head__cat">
-      <kitty-face size="md" mood="awake" />
+    <view class="head__row">
+      <view class="head__copy">
+        <text class="head__tag tag tag--accent">我们的空间</text>
+        <text class="head__title serif">我们</text>
+      </view>
+      <view class="head__cat">
+        <kitty-face size="md" mood="awake" />
+      </view>
     </view>
-    <text class="head__tag tag tag--accent">Ours</text>
-    <text class="head__title serif">我们</text>
+    <text class="head__intro">把两个人的日常，放在一个舒服的角落里</text>
   </view>
 
-  <view class="cast">
-    <view class="cast__card is-you {{role === 'A' ? 'is-current' : ''}}">
-      <view
-        class="cast__badge-wrap {{role === 'A' ? 'is-editable' : ''}}"
-        catchtap="onTapAvatar"
-        data-slot="A"
-      >
-        <image
-          wx:if="{{youAvatarSrc}}"
-          class="cast__avatar"
-          src="{{youAvatarSrc}}"
-          mode="aspectFill"
+  <view class="couple-hero card-soft fade-in">
+    <view class="hero__top">
+      <view class="hero__heading">
+        <text class="hero__eyebrow">两个人的日常</text>
+        <text class="hero__title">{{bound ? '我们的时光，正在继续' : '等 TA 加入我们的时光'}}</text>
+      </view>
+      <view class="hero__status {{bound ? 'is-connected' : 'is-pending'}}">
+        <view class="hero__status-dot"></view>
+        <text>{{bound ? '已连接' : '待连接'}}</text>
+      </view>
+    </view>
+
+    <view class="hero__people">
+      <view class="hero__person hero__person--you">
+        <view
+          class="hero__avatar-wrap {{role === 'A' ? 'is-editable' : ''}}"
           catchtap="onTapAvatar"
           data-slot="A"
-        />
-        <text wx:else class="cast__badge">我</text>
-        <text wx:if="{{role === 'A'}}" class="cast__edit">换</text>
+        >
+          <image wx:if="{{youAvatarSrc}}" class="hero__avatar" src="{{youAvatarSrc}}" mode="aspectFill" lazy-load="true"></image>
+          <text wx:else class="hero__badge">我</text>
+          <text wx:if="{{role === 'A'}}" class="hero__edit">换</text>
+        </view>
+        <text class="hero__name">{{youName}}</text>
+        <text class="hero__role">我</text>
       </view>
-      <text class="cast__name">{{youName}}</text>
-      <text class="cast__role">雾蓝紫</text>
-    </view>
-    <view class="cast__card is-them {{role === 'B' ? 'is-current' : ''}}">
-      <view
-        class="cast__badge-wrap {{role === 'B' ? 'is-editable' : ''}}"
-        catchtap="onTapAvatar"
-        data-slot="B"
-      >
-        <image
-          wx:if="{{themAvatarSrc}}"
-          class="cast__avatar"
-          src="{{themAvatarSrc}}"
-          mode="aspectFill"
+
+      <view class="hero__between">
+        <view class="hero__line"></view>
+        <text class="hero__heart">♡</text>
+        <view class="hero__line"></view>
+      </view>
+
+      <view class="hero__person hero__person--them">
+        <view
+          class="hero__avatar-wrap {{role === 'B' ? 'is-editable' : ''}}"
           catchtap="onTapAvatar"
           data-slot="B"
-        />
-        <text wx:else class="cast__badge">她</text>
-        <text wx:if="{{role === 'B'}}" class="cast__edit">换</text>
+        >
+          <image wx:if="{{themAvatarSrc}}" class="hero__avatar" src="{{themAvatarSrc}}" mode="aspectFill" lazy-load="true"></image>
+          <text wx:else class="hero__badge">她</text>
+          <text wx:if="{{role === 'B'}}" class="hero__edit">换</text>
+        </view>
+        <text class="hero__name">{{themName}}</text>
+        <text class="hero__role">TA</text>
       </view>
-      <text class="cast__name">{{themName}}</text>
-      <text class="cast__role">薰衣草紫</text>
+    </view>
+
+    <view class="hero__since">
+      <view class="hero__since-copy">
+        <text class="hero__since-label">在一起</text>
+        <text class="hero__since-date">从 {{startDate || '—'}} 开始</text>
+      </view>
+      <view class="hero__days">
+        <text class="hero__days-number">{{days}}</text>
+        <text class="hero__days-unit">天</text>
+      </view>
+    </view>
+    <text class="hero__hint">轻触自己的头像，可以换一张照片</text>
+
+    <view class="hero__invite" bindtap="onTapInvite" wx:if="{{!bound}}">
+      <view class="hero__invite-copy">
+        <text class="hero__invite-title">邀请 TA 加入这个空间</text>
+        <text class="hero__invite-sub">一起留下记录，才会慢慢长成我们的故事</text>
+      </view>
+      <text class="hero__invite-arrow">→</text>
+    </view>
+    <view class="hero__connected" wx:else>
+      <text>✓ 这个空间已经连接好啦</text>
     </view>
   </view>
 
-  <view class="row card-soft" bindtap="onEditNickname">
-    <text class="row__label">我的昵称</text>
-    <text class="row__val accent">{{youName}} →</text>
+  <view class="section-head">
+    <text>一起的日子</text>
+    <text class="section-head__hint">常用入口</text>
   </view>
+  <view class="quick-grid">
+    <view class="quick-card-row">
+      <view class="quick-card quick-card--anniversary card-soft" bindtap="onTapAnniversaries">
+        <view class="quick-card__top">
+          <text class="quick-card__icon">日</text>
+          <text class="quick-card__arrow">↗</text>
+        </view>
+        <text class="quick-card__title">纪念日</text>
+        <text class="quick-card__hint">留住值得记住的日期</text>
+      </view>
 
-  <view class="row card-soft" wx:if="{{partnerWechatId}}">
-    <text class="row__label">她（直接绑定）</text>
-    <text class="row__val">{{partnerWechatId}}</text>
-  </view>
-
-  <picker mode="date" value="{{startDate}}" bindchange="onPickStartDate">
-    <view class="row card-soft row--picker">
-      <text class="row__label">在一起从</text>
-      <text class="row__val">{{startDate || '—'}}</text>
+      <view class="quick-card quick-card--map card-soft" bindtap="onTapMap">
+        <view class="quick-card__top">
+          <text class="quick-card__icon">迹</text>
+          <text class="quick-card__arrow">↗</text>
+        </view>
+        <text class="quick-card__title">我们的足迹</text>
+        <text class="quick-card__hint">看看一起走过的地方</text>
+      </view>
     </view>
-  </picker>
 
-  <view class="row card-soft">
-    <text class="row__label">在一起</text>
-    <text class="row__val accent">第 {{days}} 天</text>
-  </view>
-
-  <view class="row card-soft" bindtap="onTapInvite" wx:if="{{!bound}}">
-    <text class="row__label">邀请她</text>
-    <text class="row__val">分享 →</text>
-  </view>
-
-  <view class="row card-soft" bindtap="onTapPet">
-    <text class="row__label">我们的小猫</text>
-    <text class="row__val accent">{{petLabel}} →</text>
-  </view>
-
-  <view class="row card-soft" bindtap="onTapAnniversaries">
-    <text class="row__label">纪念日</text>
-    <text class="row__val">管理 →</text>
-  </view>
-
-  <view class="row card-soft" bindtap="onTapMap">
-    <text class="row__label">足迹地图</text>
-    <text class="row__val">查看 →</text>
-  </view>
-
-  <view class="row card-soft" bindtap="onTapCheckinHistory">
-    <text class="row__label">签到记录</text>
-    <text class="row__val">日历 →</text>
-  </view>
-
-  <view class="row card-soft" bindtap="onTapPrivacy">
-    <text class="row__label">隐私政策</text>
-    <text class="row__val">查看 →</text>
-  </view>
-
-  <view class="danger">
-    <text class="danger__title">清空所有记录</text>
-    <view class="danger__btn" bindtap="onToggleClear">{{showClear ? '收起' : '展开'}}</view>
-
-    <view wx:if="{{showClear}}" class="danger__panel card-soft">
-      <text class="danger__hint">将删除全部动态、签到和绑定。请输入「确认」。</text>
-      <input class="danger__input" placeholder="输入「确认」" placeholder-style="color: rgba(74,68,88,0.35)" value="{{confirmText}}" bindinput="onConfirmInput" />
-      <view class="danger__actions">
-        <view class="btn-action btn-action--ghost" bindtap="onToggleClear">取消</view>
-        <view class="btn-danger" bindtap="onConfirmClear">确认清空</view>
+    <view class="quick-card-row">
+      <view class="quick-card quick-card--pet card-soft" bindtap="onTapPet">
+        <view class="quick-card__top">
+          <text class="quick-card__icon">猫</text>
+          <text class="quick-card__arrow">↗</text>
+        </view>
+        <text class="quick-card__title">我们的小猫</text>
+        <text class="quick-card__hint">{{petLabel}}</text>
       </view>
     </view>
   </view>
+
+  <view class="section-head">
+    <text>空间设置</text>
+    <text class="section-head__hint">只保留真正有用的</text>
+  </view>
+  <view class="settings card-soft">
+    <view class="settings-row" bindtap="onEditNickname">
+      <view class="settings-copy">
+        <text class="settings-title">我的昵称</text>
+        <text class="settings-hint">在回忆里显示为 {{youName}}</text>
+      </view>
+      <text class="settings-value accent">{{youName}} · 编辑</text>
+    </view>
+
+    <view class="settings-row" wx:if="{{partnerWechatId}}">
+      <view class="settings-copy">
+        <text class="settings-title">绑定信息</text>
+        <text class="settings-hint">你们的空间已和 TA 连接</text>
+      </view>
+      <text class="settings-value">{{partnerWechatId}}</text>
+    </view>
+
+    <picker mode="date" value="{{startDate}}" bindchange="onPickStartDate">
+      <view class="settings-row settings-row--picker">
+        <view class="settings-copy">
+          <text class="settings-title">在一起从</text>
+          <text class="settings-hint">修改后会重新计算相伴天数</text>
+        </view>
+        <text class="settings-value">{{startDate || '未设置'}} →</text>
+      </view>
+    </picker>
+  </view>
+
+  <text class="profile-foot">头像可以直接在上方更换，其他设置保持简单就好</text>
 
   <pet-float />
 </view>

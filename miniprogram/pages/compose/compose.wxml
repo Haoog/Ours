@@ -13,11 +13,10 @@
       class="viewfinder__text"
       placeholder="文字、心情、今天发生的事……"
       placeholder-style="color: rgba(74,68,88,0.35)"
-      maxlength="500"
       value="{{content}}"
       bindinput="onContentInput"
+      maxlength="-1"
       auto-height />
-    <view class="viewfinder__count tag">{{contentLen}} / 500</view>
   </view>
 
   <view class="media-bar card-soft">
@@ -51,7 +50,7 @@
 
   <view class="grid" wx:if="{{images.length > 0}}">
     <view class="grid__cell" wx:for="{{images}}" wx:key="*this" wx:for-item="src">
-      <image src="{{src}}" mode="aspectFill"></image>
+      <image src="{{src}}" mode="aspectFill" lazy-load="true"></image>
       <view class="grid__badge" wx:if="{{src.indexOf('.gif') !== -1 || src.indexOf('.GIF') !== -1}}">动图</view>
       <view class="grid__remove" data-src="{{src}}" bindtap="onRemoveImage">×</view>
     </view>
@@ -62,7 +61,7 @@
   </view>
 
   <view class="video-box card-soft" wx:if="{{video}}">
-    <video class="video-box__player" src="{{video}}" controls show-center-play-btn></video>
+    <video class="video-box__player" src="{{video}}" poster="{{videoCover}}" controls show-center-play-btn></video>
     <view class="video-box__remove" bindtap="onRemoveVideo">删除视频</view>
   </view>
 
@@ -106,8 +105,8 @@
   </view>
 
   <view class="actions">
-    <view class="btn-action btn-action--ghost" bindtap="onCancel">取消</view>
-    <view class="btn-action {{canPost && !posting ? '' : 'is-disabled'}}" bindtap="onSubmit">
+    <view class="btn-action btn-action--ghost" hover-class="u-press" bindtap="onCancel">取消</view>
+    <view class="btn-action {{canPost && !posting ? '' : 'is-disabled'}}" hover-class="u-press" bindtap="onSubmit">
       {{posting ? '保存中…' : '保存'}}
     </view>
   </view>
@@ -120,6 +119,7 @@
         <view class="upload-bar__fill" style="width: {{uploadProgress}}%;"></view>
       </view>
       <text class="upload-panel__pct">{{uploadProgress}}%</text>
+      <view class="upload-panel__cancel" hover-class="u-press" bindtap="onCancelUpload">取消上传</view>
     </view>
   </view>
 

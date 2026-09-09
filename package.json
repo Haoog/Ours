@@ -4,7 +4,9 @@
   "private": true,
   "description": "OursWXAPP - 两个人的私密朋友圈（开发期 TS 校验配置）",
   "scripts": {
-    "typecheck": "tsc --noEmit -p miniprogram/tsconfig.json"
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p miniprogram/tsconfig.json",
+    "admin:dev": "npm --prefix admin-web run dev",
+    "admin:build": "npm --prefix admin-web run build"
   },
   "devDependencies": {
     "miniprogram-api-typings": "3.12.3",

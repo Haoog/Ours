@@ -1,5 +1,5 @@
 /* =========================================================
-   Ours · 淡紫手帐 + 小猫
+   Ours · 淡紫照片日记 + 小猫
    紫色主调 · 克制不幼 · 小猫点缀
    ========================================================= */
 
@@ -149,7 +149,7 @@ page {
   transform: scale(0.96);
 }
 
-/* 右下角 +：贴纸 FAB（回忆 / 互动） */
+/* 右下角 +：贴纸 FAB（回忆） */
 .fab-sticker {
   width: 108rpx;
   height: 108rpx;
@@ -207,6 +207,12 @@ page {
   box-shadow: none;
 }
 
+/* 通用按压反馈：元素加 hover-class="u-press" 即可获得轻微回弹 */
+.u-press {
+  opacity: 0.86;
+  transform: scale(0.97);
+}
+
 /* 小猫互动：手帐贴纸（浮窗 / 宠物页），勿与 btn-action 混用 */
 .pet-sticker {
   display: inline-flex;
@@ -250,7 +256,7 @@ page {
   box-shadow: none;
 }
 
-/* 二级 Tab / 筛选：书签分段（回忆视图、互动子 Tab 等） */
+/* 二级 Tab / 筛选：书签分段（回忆视图等） */
 .seg-strip {
   display: flex;
   gap: 10rpx;

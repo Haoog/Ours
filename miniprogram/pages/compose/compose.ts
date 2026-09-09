@@ -1,16 +1,20 @@
 // pages/compose/compose.ts —— 发布动态（图文 / 视频 / 语音 / 实况）
 
-import { addMoment, getCouple, getIdentity } from '../../services/store'
+import { addMoment, getCouple, getIdentity, listMomentsPage, cancelMomentUpload } from '../../services/store'
 import { todayKey } from '../../services/date'
 import { formatMomentDateLabel } from '../../utils/moment-time'
 import { ensureCloudReady } from '../../services/page-boot'
 import { getAppInstance } from '../../app'
+import { markMomentsListStale } from '../../services/moments-list-state'
+import { feedCacheKey, prefetchMomentsFeed } from '../../services/moments-feed-cache'
 import { MomentLocation, MomentTag } from '../../services/types'
 import { MOMENT_TAG_POST } from '../../utils/tags'
 import { isLikelyLivePhotoFile, isRegularVideoFile } from '../../utils/live-photo'
 
 const PICK_BATCH = 20
-const MAX_VOICE_SEC = 60
+// 微信 RecorderManager 单条录音最长支持 600 秒；语音无法像文字一样真正无限。
+const MAX_VOICE_SEC = 600
+const DRAFT_KEY = 'OURS_COMPOSE_DRAFT'
 
 interface VoiceDraft {
   path: string
@@ -27,10 +31,10 @@ interface LivePhotoDraft {
 Page({
   data: {
     content: '',
-    contentLen: 0,
     images: [] as string[],
     livePhotos: [] as LivePhotoDraft[],
     video: '' as string,
+    videoCover: '' as string,
     voice: null as VoiceDraft | null,
     recording: false,
     recordSec: 0,
@@ -52,6 +56,7 @@ Page({
 
   recorder: null as WechatMiniprogram.RecorderManager | null,
   recordTimer: 0 as ReturnType<typeof setInterval> | number,
+  draftTimer: 0 as ReturnType<typeof setTimeout> | number,
 
   async onLoad() {
     await getAppInstance().waitBoot()
@@ -69,13 +74,51 @@ Page({
       maxMomentDate: momentDate,
     })
     this.initRecorder()
+    this.restoreDraft()
   },
 
   onUnload() {
     this.stopRecordTimer()
+    if (this.draftTimer) clearTimeout(this.draftTimer as number)
+    this.saveDraft()
     if (this.data.recording && this.recorder) {
       this.recorder.stop()
     }
+  },
+
+  restoreDraft() {
+    try {
+      const d = wx.getStorageSync(DRAFT_KEY)
+      if (d && d.content) {
+        this.setData({
+          content: d.content,
+          tagSelected: (d.tag as MomentTag) || this.data.tagSelected,
+          canPost: this.syncCanPost({ content: d.content }),
+        })
+        wx.showToast({ title: '已恢复上次草稿', icon: 'none' })
+      }
+    } catch (e) {}
+  },
+
+  scheduleDraftSave() {
+    if (this.draftTimer) clearTimeout(this.draftTimer as number)
+    this.draftTimer = setTimeout(() => this.saveDraft(), 600)
+  },
+
+  saveDraft() {
+    try {
+      if (this.data.content.trim()) {
+        wx.setStorageSync(DRAFT_KEY, { content: this.data.content, tag: this.data.tagSelected })
+      } else {
+        wx.removeStorageSync(DRAFT_KEY)
+      }
+    } catch (e) {}
+  },
+
+  clearDraft() {
+    try {
+      wx.removeStorageSync(DRAFT_KEY)
+    } catch (e) {}
   },
 
   initRecorder() {
@@ -117,9 +160,9 @@ Page({
     const v = e.detail.value
     this.setData({
       content: v,
-      contentLen: v.length,
       canPost: this.computeCanPost(v, this.data.images, this.data.livePhotos, this.data.video, this.data.voice),
     })
+    this.scheduleDraftSave()
   },
 
   computeCanPost(
@@ -151,6 +194,7 @@ Page({
     let images = [...this.data.images]
     let livePhotos = [...this.data.livePhotos]
     let video = this.data.video
+    let videoCover = this.data.videoCover
     let skippedVideo = false
     let addedLive = 0
 
@@ -166,7 +210,10 @@ Page({
         continue
       }
       if (isRegularVideoFile(f)) {
-        if (!video) video = f.tempFilePath
+        if (!video) {
+          video = f.tempFilePath
+          videoCover = f.thumbTempFilePath || ''
+        }
         else skippedVideo = true
         continue
       }
@@ -184,6 +231,7 @@ Page({
       images,
       livePhotos,
       video,
+      videoCover,
       canPost: this.syncCanPost({ images, livePhotos, video }),
     })
   },
@@ -192,7 +240,8 @@ Page({
     wx.chooseMedia({
       count: PICK_BATCH,
       mediaType: this.data.video ? ['image', 'video'] : ['image', 'video'],
-      sizeType: ['original'],
+      // 主入口走压缩：普通图片显著减小体积、加快上传；实况/单独视频仍走原图入口保真
+      sizeType: ['compressed'],
       sourceType: ['album', 'camera'],
       maxDuration: 60,
       success: res => this.applyMediaFiles(res.tempFiles),
@@ -278,6 +327,7 @@ Page({
         }
         this.setData({
           video: file.tempFilePath,
+          videoCover: file.thumbTempFilePath || '',
           canPost: this.syncCanPost({ video: file.tempFilePath }),
         })
       },
@@ -302,7 +352,7 @@ Page({
   },
 
   onRemoveVideo() {
-    this.setData({ video: '', canPost: this.syncCanPost({ video: '' }) })
+    this.setData({ video: '', videoCover: '', canPost: this.syncCanPost({ video: '' }) })
   },
 
   onRemoveVoice() {
@@ -409,6 +459,11 @@ Page({
     })
   },
 
+  onCancelUpload() {
+    cancelMomentUpload()
+    wx.showToast({ title: '正在取消…', icon: 'none' })
+  },
+
   async onSubmit() {
     if (!this.data.canPost || this.data.posting) {
       if (!this.data.canPost) wx.showToast({ title: '写点内容或加点媒体吧', icon: 'none' })
@@ -431,6 +486,7 @@ Page({
             duration: lp.duration,
           })),
           videos: this.data.video ? [this.data.video] : [],
+          videoCover: this.data.videoCover,
           voices: this.data.voice ? [this.data.voice] : [],
         location: this.data.locationFull,
         tag: this.data.tagSelected,
@@ -440,6 +496,10 @@ Page({
           this.setData({ uploadProgress: percent, uploadHint: hint })
         },
       )
+      markMomentsListStale()
+      this.clearDraft()
+      // 利用跳转前的 toast 间隙预取首屏，回到回忆 Tab 时秒开（含刚发布的这条）
+      prefetchMomentsFeed(feedCacheKey(), () => listMomentsPage({ limit: 20, skip: 0 }))
       wx.showToast({ title: '已保存', icon: 'success' })
       setTimeout(() => {
         wx.switchTab({ url: '/pages/moments/moments' })

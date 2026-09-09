@@ -53,10 +53,54 @@
   color: var(--text);
 }
 
+.field__input--code {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .field--picker {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.field--avatar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.field--avatar .field__label {
+  margin-bottom: 0;
+}
+
+.avatar-pick {
+  width: 96rpx;
+  height: 96rpx;
+  padding: 0;
+  margin: 0;
+  border-radius: 50%;
+  background: rgba(139, 126, 200, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.avatar-pick::after {
+  border: none;
+}
+
+.avatar-pick__img {
+  width: 96rpx;
+  height: 96rpx;
+  border-radius: 50%;
+}
+
+.avatar-pick__ph {
+  font-size: 44rpx;
+  color: var(--accent);
+  line-height: 1;
 }
 
 .field__val {

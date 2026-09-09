@@ -3,6 +3,7 @@
   "navigationBarBackgroundColor": "#F5F3FA",
   "navigationBarTextStyle": "black",
   "backgroundColor": "#F5F3FA",
+  "enablePullDownRefresh": true,
   "usingComponents": {
     "kitty-face": "/components/kitty-face/kitty-face"
   }

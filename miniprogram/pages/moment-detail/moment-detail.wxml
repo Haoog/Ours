@@ -20,6 +20,7 @@
     <video
       class="video-wrap__player"
       src="{{item.video}}"
+      poster="{{item.videoCover}}"
       controls
       show-center-play-btn
       object-fit="contain" />
@@ -33,7 +34,13 @@
   <view wx:if="{{item.imgCount > 0}}" class="gallery">
     <view class="gallery__item" wx:for="{{item.images}}" wx:key="*this" wx:for-item="src">
       <view class="widescreen" data-src="{{src}}" bindtap="onTapImage">
-        <image src="{{src}}" mode="aspectFill" lazy-load />
+        <image
+          class="{{loadedImgs[src] ? 'is-loaded' : ''}}"
+          src="{{src}}"
+          mode="aspectFill"
+          lazy-load
+          data-src="{{src}}"
+          bindload="onImgLoad" />
         <view class="gallery__gif" wx:if="{{src.indexOf('.gif') !== -1 || src.indexOf('.GIF') !== -1}}">GIF</view>
       </view>
     </view>
@@ -47,7 +54,7 @@
 
   <view class="interact card-soft" wx:if="{{canInteract}}">
     <view class="interact__row">
-      <view class="like-btn {{liked ? 'is-on' : ''}}" bindtap="onToggleLike">
+      <view class="like-btn {{liked ? 'is-on' : ''}}" hover-class="u-press" bindtap="onToggleLike">
         <text>{{liked ? '♥' : '♡'}} {{likeCount}}</text>
       </view>
     </view>
@@ -61,14 +68,22 @@
       <view wx:if="{{comments.length === 0}}" class="comments__empty">还没有评论</view>
     </view>
     <view class="comment-compose">
-      <input class="comment-compose__input" placeholder="说点什么…" value="{{commentDraft}}" bindinput="onCommentInput" />
+      <input class="comment-compose__input" placeholder="说点什么…" value="{{commentDraft}}" bindinput="onCommentInput" maxlength="-1" />
       <view class="comment-compose__send" bindtap="onSubmitComment">发送</view>
     </view>
   </view>
 
   <view class="actions" wx:if="{{!item.isSystem}}">
-    <view class="btn-action btn-action--ghost" bindtap="onTapDelete">删除这条</view>
+    <button class="btn-action btn-action--ghost action-btn" hover-class="u-press" open-type="share">分享给 TA</button>
+    <view class="btn-action btn-action--ghost" hover-class="u-press" bindtap="onTapDelete">删除这条</view>
   </view>
+</view>
+
+<view wx:elif="{{loading}}" class="page grain detail-skeleton">
+  <view class="dsk-line dsk-line--head"></view>
+  <view class="dsk-hero"></view>
+  <view class="dsk-line"></view>
+  <view class="dsk-line dsk-line--short"></view>
 </view>
 
 <view class="empty-stage" wx:else>

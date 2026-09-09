@@ -2,14 +2,27 @@
   <view class="hero fade-in">
     <kitty-face size="lg" mood="awake" />
     <text class="hero__tag tag tag--accent">Ours</text>
-    <text class="hero__title serif">创建我们的空间</text>
-    <text class="hero__sub">她（{{partnerHint}}）打开小程序会自动加入，无需配对码</text>
+    <text class="hero__title serif">激活我们的空间</text>
+    <text class="hero__sub">请输入管理员提供的邀请码后开始使用</text>
   </view>
 
   <view class="form card-soft">
     <view class="field">
+      <text class="field__label">邀请码</text>
+      <input class="field__input field__input--code" placeholder="例如：OURS-7K9P-X2QD" value="{{accessCode}}" bindinput="onCodeInput" />
+    </view>
+
+    <view class="field field--avatar">
+      <text class="field__label">你的头像</text>
+      <button class="avatar-pick" open-type="chooseAvatar" bind:chooseavatar="onChooseAvatar">
+        <image wx:if="{{avatarUrl}}" class="avatar-pick__img" src="{{avatarUrl}}" mode="aspectFill"></image>
+        <text wx:else class="avatar-pick__ph">＋</text>
+      </button>
+    </view>
+
+    <view class="field">
       <text class="field__label">你的昵称</text>
-      <input class="field__input" placeholder="例如：我" maxlength="12" value="{{nickname}}" bindinput="onNicknameInput" />
+      <input class="field__input" type="nickname" placeholder="例如：我" value="{{nickname}}" bindinput="onNicknameInput" />
     </view>
 
     <picker mode="date" value="{{startDate}}" bindchange="onPickDate">
@@ -21,8 +34,9 @@
   </view>
 
   <view class="setup-tip card-soft">
-    <text>首次使用没有数据是正常的：创建空间后，用右下角 + 记第一条动态即可。</text>
+    <text wx:if="{{statusMessage}}">{{statusMessage}}</text>
+    <text wx:else>邀请码只能使用一次。激活后，你可以在“我们”页面邀请另一位成员加入。</text>
   </view>
 
-  <view class="btn-action" bindtap="onSubmit">创建空间</view>
+  <view class="btn-action" hover-class="u-press" bindtap="onSubmit">激活并开始使用</view>
 </view>

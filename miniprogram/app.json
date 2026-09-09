@@ -7,11 +7,6 @@
     "pages/compose/compose",
     "pages/moment-detail/moment-detail",
     "pages/bind/bind",
-    "pages/checkin-history/checkin-history",
-    "pages/privacy/privacy",
-    "pages/interact/interact",
-    "pages/anniversaries/anniversaries",
-    "pages/map/map",
     "pages/pet/pet"
   ],
   "window": {
@@ -36,10 +31,6 @@
         "text": "回忆"
       },
       {
-        "pagePath": "pages/interact/interact",
-        "text": "互动"
-      },
-      {
         "pagePath": "pages/profile/profile",
         "text": "我们"
       }
@@ -62,8 +53,29 @@
       "desc": "用于从相册选择照片和视频"
     }
   },
-  "requiredPrivateInfos": ["chooseLocation"],
+  "requiredPrivateInfos": [
+    "chooseLocation"
+  ],
   "usingComponents": {
     "pet-float": "/components/pet-float/pet-float"
+  },
+  "subpackages": [
+    {
+      "root": "subpages/",
+      "pages": [
+        "map/map",
+        "anniversaries/anniversaries"
+      ]
+    }
+  ],
+  "preloadRule": {
+    "pages/home/home": {
+      "network": "all",
+      "packages": ["subpages/"]
+    },
+    "pages/profile/profile": {
+      "network": "all",
+      "packages": ["subpages/"]
+    }
   }
 }

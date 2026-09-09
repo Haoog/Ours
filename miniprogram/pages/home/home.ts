@@ -5,56 +5,35 @@ import {
   getIdentity,
   daysBetween,
   listMomentsRecent,
-  getCheckinState,
-  addCheckin,
   getNextAnniversary,
 } from '../../services/store'
 import { ensureCloudReady, handleInviteQuery } from '../../services/page-boot'
-import { pickMomentCover, toDisplayUrl } from '../../utils/media-url'
+import { pickMomentCover } from '../../utils/media-url'
 import { momentDisplayAt } from '../../utils/moment-time'
 import { getAppInstance } from '../../app'
 import { formatSlate } from '../../services/format'
-import { Moment, Mood } from '../../services/types'
+import { Moment } from '../../services/types'
 
 interface RecentVO {
   id: string
   cover: string
   mediaTag: string
   caption: string
+  hasVideo: boolean
   md: string
   dow: string
   role: 'A' | 'B'
   authorLabel: string
 }
 
-interface MoodOption { key: Mood; name: string }
-
-const MOODS: MoodOption[] = [
-  { key: 'happy', name: '挺好' },
-  { key: 'soft', name: '平静' },
-  { key: 'low', name: '低落' },
-  { key: 'rant', name: '想说' },
-]
-
 Page({
   data: {
     ready: false,
     bound: false,
     days: 0,
-    youChecked: false,
-    themChecked: false,
-    bothToday: false,
-    streak: 0,
-    youLabel: '你',
-    themLabel: 'TA',
-    youAvatarSrc: '',
-    themAvatarSrc: '',
     recent: [] as RecentVO[],
     hasRecent: false,
-    checkinOpen: false,
-    moodList: MOODS,
-    moodSelected: 'happy' as Mood,
-    noteDraft: '',
+    recentLoaded: false,
     nextAnn: null as { title: string; label: string } | null,
   },
 
@@ -64,35 +43,45 @@ Page({
   },
 
   async onShow() {
+    this.renderOptimistic()
     await getAppInstance().waitBoot()
     if (!(await ensureCloudReady())) return
     await this.refresh()
   },
 
+  async onPullDownRefresh() {
+    await this.refresh()
+    wx.stopPullDownRefresh()
+  },
+
+  /** 冷启动用本地持久化的会话即时出图，避免白屏；随后 refresh 拉最新覆盖 */
+  renderOptimistic() {
+    if (this.data.ready) return
+    const couple = getCouple()
+    if (!couple) return
+    this.setData({
+      ready: true,
+      bound: !!couple.memberB,
+      days: daysBetween(couple.startDate),
+    })
+  },
+
   async refresh() {
     const couple = getCouple()
     if (!couple) {
-      this.setData({ ready: true, bound: false })
+      this.setData({ ready: true, bound: false, recentLoaded: true })
       return
     }
 
     try {
-      const [checkinState, moments, nextAnn] = await Promise.all([
-        getCheckinState(),
-        listMomentsRecent(3),
-        getNextAnniversary(),
-      ])
+      const [moments, nextAnn] = await Promise.all([listMomentsRecent(8), getNextAnniversary()])
 
       const identity = getIdentity()
       const myRole = identity.role
-      const partnerRole = myRole === 'A' ? 'B' : 'A'
-      const checkins = checkinState.checkins
-      const youChecked = checkins.some(c => c.role === myRole)
-      const themChecked = checkins.some(c => c.role === partnerRole)
       const days = daysBetween(couple.startDate)
 
       const recent: RecentVO[] = await Promise.all(
-        moments.slice(0, 3).map(async (m: Moment) => {
+        moments.map(async (m: Moment) => {
           const slate = formatSlate(momentDisplayAt(m))
           const cover = await pickMomentCover(m)
           const tags: string[] = []
@@ -107,6 +96,7 @@ Page({
             cover,
             mediaTag,
             caption: cap,
+            hasVideo: (m.videos?.length ?? 0) > 0,
             md: slate.md,
             dow: slate.dow,
             role: m.authorRole,
@@ -115,76 +105,19 @@ Page({
         }),
       )
 
-      const [youAvatarSrc, themAvatarSrc] = await Promise.all([
-        toDisplayUrl(couple.memberA.avatarUrl),
-        toDisplayUrl(couple.memberB?.avatarUrl ?? ''),
-      ])
-
       this.setData({
         ready: true,
         bound: !!couple.memberB,
         days,
-        youChecked,
-        themChecked,
-        bothToday: checkinState.bothChecked,
-        streak: checkinState.streakDays,
-        youLabel: couple.memberA.nickname || '你',
-        themLabel: couple.memberB?.nickname || '她',
-        youAvatarSrc,
-        themAvatarSrc,
         recent,
         hasRecent: recent.length > 0,
+        recentLoaded: true,
         nextAnn: nextAnn ? { title: nextAnn.title, label: nextAnn.label } : null,
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
       wx.showToast({ title: msg, icon: 'none' })
-      this.setData({ ready: true })
-    }
-  },
-
-  onTapYou() {
-    if (this.data.youChecked) {
-      wx.showToast({ title: '你今天已签到', icon: 'none' })
-      return
-    }
-    this.setData({ checkinOpen: true, noteDraft: '', moodSelected: 'happy' })
-  },
-
-  onTapThem() {
-    if (!this.data.bound) {
-      wx.navigateTo({ url: '/pages/bind/bind' })
-      return
-    }
-    if (this.data.themChecked) {
-      wx.showToast({ title: '她今天已签到', icon: 'none' })
-      return
-    }
-    wx.showToast({ title: '等她打开小程序签到', icon: 'none' })
-  },
-
-  closeCheckin() {
-    this.setData({ checkinOpen: false })
-  },
-
-  onPickMood(e: WechatMiniprogram.BaseEvent) {
-    const key = e.currentTarget.dataset.key as Mood
-    this.setData({ moodSelected: key })
-  },
-
-  onNoteInput(e: WechatMiniprogram.Input) {
-    this.setData({ noteDraft: e.detail.value })
-  },
-
-  async onSubmitCheckin() {
-    try {
-      await addCheckin({ mood: this.data.moodSelected, note: this.data.noteDraft })
-      this.setData({ checkinOpen: false })
-      wx.showToast({ title: '签到完成', icon: 'success' })
-      await this.refresh()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '签到失败'
-      wx.showToast({ title: msg, icon: 'none' })
+      this.setData({ ready: true, recentLoaded: true })
     }
   },
 
@@ -205,12 +138,8 @@ Page({
     wx.navigateTo({ url: '/pages/bind/bind' })
   },
 
-  onTapStreak() {
-    wx.navigateTo({ url: '/pages/checkin-history/checkin-history' })
-  },
-
   onTapAnniversary() {
-    wx.navigateTo({ url: '/pages/anniversaries/anniversaries' })
+    wx.navigateTo({ url: '/subpages/anniversaries/anniversaries' })
   },
 
 })

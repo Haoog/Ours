@@ -1,4 +1,4 @@
-// pages/moment-detail/moment-detail.ts —— 放映 + 评论/爱心
+// pages/moment-detail/moment-detail.ts —— 回忆详情 + 评论/爱心
 
 import {
   getMoment,
@@ -20,6 +20,7 @@ import { momentDisplayAt, isBackdatedMoment } from '../../utils/moment-time'
 import { MomentLivePhoto, MomentComment } from '../../services/types'
 import { tagLabel } from '../../utils/tags'
 import { resolveMomentImages, resolveMomentLivePhotos, toDisplayUrl } from '../../utils/media-url'
+import { markMomentsListStale } from '../../services/moments-list-state'
 
 interface DetailVO {
   id: string
@@ -30,6 +31,7 @@ interface DetailVO {
   livePhotos: MomentLivePhoto[]
   images: string[]
   video: string
+  videoCover: string
   voiceFileID: string
   voiceDuration: number
   voicePlaying: boolean
@@ -51,9 +53,12 @@ interface CommentVO {
 Page({
   data: {
     found: false,
+    loading: true,
+    loadedImgs: {} as Record<string, boolean>,
     item: null as DetailVO | null,
     comments: [] as CommentVO[],
     commentDraft: '',
+    commentSubmitting: false,
     likeCount: 0,
     liked: false,
     canInteract: true,
@@ -77,7 +82,7 @@ Page({
     this.momentId = id
     this.filterTag = (opt.tag ?? '') as MomentTag | ''
     if (!id) {
-      this.setData({ found: false })
+      this.setData({ found: false, loading: false })
       return
     }
     this.myRole = getIdentity().role
@@ -85,10 +90,11 @@ Page({
   },
 
   async loadAll(id: string) {
+    this.setData({ loading: true, loadedImgs: {} })
     try {
       const m = await getMoment(id)
       if (!m) {
-        this.setData({ found: false })
+        this.setData({ found: false, loading: false })
         return
       }
       const isSystem = m.kind === 'system'
@@ -102,6 +108,7 @@ Page({
       const images = isSystem ? [] : await resolveMomentImages(m.images)
       const livePhotos = isSystem ? [] : await resolveMomentLivePhotos(m.livePhotos ?? [])
       const video = !isSystem && m.videos?.[0] ? await toDisplayUrl(m.videos[0]) : ''
+      const videoCover = !isSystem && m.videoCover ? await toDisplayUrl(m.videoCover) : ''
 
       const item: DetailVO = {
         id: m.id,
@@ -112,6 +119,7 @@ Page({
         livePhotos,
         images,
         video,
+        videoCover,
         voiceFileID: m.voices?.[0]?.fileID ?? '',
         voiceDuration: m.voices?.[0]?.duration ?? 0,
         voicePlaying: false,
@@ -121,6 +129,15 @@ Page({
         location: m.location?.name ?? '',
         tagLabel: tagLabel(m.tag),
         isSystem,
+      }
+
+      // 预解析语音链接：首次点播不再等待换链
+      if (!isSystem && item.voiceFileID) {
+        resolveCloudUrl(item.voiceFileID)
+          .then(url => {
+            this.voiceUrl = url
+          })
+          .catch(() => undefined)
       }
 
       let comments: CommentVO[] = []
@@ -152,6 +169,7 @@ Page({
 
       this.setData({
         found: true,
+        loading: false,
         item,
         comments,
         likeCount,
@@ -163,12 +181,43 @@ Page({
         navTotal,
       })
     } catch {
-      this.setData({ found: false })
+      this.setData({ found: false, loading: false })
     }
+  },
+
+  onImgLoad(e: WechatMiniprogram.BaseEvent) {
+    const src = e.currentTarget.dataset.src as string
+    if (!src || this.data.loadedImgs[src]) return
+    this.setData({ loadedImgs: { ...this.data.loadedImgs, [src]: true } })
   },
 
   onUnload() {
     this.stopVoice()
+  },
+
+  shareCard() {
+    const item = this.data.item
+    const title = (item?.content || '').trim().slice(0, 30) || '我们的一条回忆'
+    const imageUrl = item?.images?.[0] || item?.livePhotos?.[0]?.cover || ''
+    return { title, imageUrl }
+  },
+
+  onShareAppMessage(): WechatMiniprogram.Page.ICustomShareContent {
+    const { title, imageUrl } = this.shareCard()
+    return {
+      title,
+      path: `/pages/moment-detail/moment-detail?id=${this.momentId}`,
+      imageUrl,
+    }
+  },
+
+  onShareTimeline(): WechatMiniprogram.Page.ICustomTimelineContent {
+    const { title, imageUrl } = this.shareCard()
+    return {
+      title,
+      query: `id=${this.momentId}`,
+      imageUrl,
+    }
   },
 
   async goNeighbor(direction: 'prev' | 'next') {
@@ -227,11 +276,18 @@ Page({
 
   async onToggleLike() {
     if (!this.data.canInteract) return
+    // 乐观更新：先即时反馈，失败再回滚
+    const prevLiked = this.data.liked
+    const prevCount = this.data.likeCount
+    const nextLiked = !prevLiked
+    this.setData({ liked: nextLiked, likeCount: Math.max(0, prevCount + (nextLiked ? 1 : -1)) })
+    wx.vibrateShort({ type: 'light' })
     try {
       const likes = await toggleMomentLike(this.momentId)
       const liked = this.myRole === 'A' ? likes.likedByA : likes.likedByB
       this.setData({ liked, likeCount: likes.count })
     } catch (err) {
+      this.setData({ liked: prevLiked, likeCount: prevCount })
       const msg = err instanceof Error ? err.message : '操作失败'
       wx.showToast({ title: msg, icon: 'none' })
     }
@@ -242,15 +298,26 @@ Page({
   },
 
   async onSubmitComment() {
+    if (this.data.commentSubmitting) return
     const content = this.data.commentDraft.trim()
     if (!content) return
+    this.setData({ commentSubmitting: true })
     try {
-      await addComment(this.momentId, content)
-      this.setData({ commentDraft: '' })
-      await this.loadAll(this.momentId)
+      const c = await addComment(this.momentId, content)
+      wx.vibrateShort({ type: 'light' })
+      // 直接追加，避免整页重载（评论/爱心/相邻都重拉）
+      const vo: CommentVO = {
+        id: c.id,
+        content: c.content,
+        author: c.authorRole === this.myRole ? '我' : '她',
+        canDelete: c.authorRole === this.myRole,
+      }
+      this.setData({ commentDraft: '', comments: [...this.data.comments, vo] })
     } catch (err) {
       const msg = err instanceof Error ? err.message : '发送失败'
       wx.showToast({ title: msg, icon: 'none' })
+    } finally {
+      this.setData({ commentSubmitting: false })
     }
   },
 
@@ -260,10 +327,12 @@ Page({
       title: '删除评论？',
       success: async res => {
         if (!res.confirm) return
+        const prev = this.data.comments
+        this.setData({ comments: prev.filter(c => c.id !== id) })
         try {
           await deleteComment(id)
-          await this.loadAll(this.momentId)
         } catch (err) {
+          this.setData({ comments: prev })
           const msg = err instanceof Error ? err.message : '删除失败'
           wx.showToast({ title: msg, icon: 'none' })
         }
@@ -284,6 +353,7 @@ Page({
         try {
           this.stopVoice()
           await deleteMoment(item.id)
+          markMomentsListStale()
           wx.navigateBack().catch(() => wx.switchTab({ url: '/pages/moments/moments' }))
         } catch (err) {
           const msg = err instanceof Error ? err.message : '删除失败'

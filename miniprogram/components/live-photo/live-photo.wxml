@@ -1,5 +1,5 @@
 <view class="live-photo" bindtap="onTap">
-  <image class="live-photo__cover" src="{{cover}}" mode="aspectFill" />
+  <image class="live-photo__cover" src="{{cover}}" mode="aspectFill" lazy-load="true" />
   <video
     wx:if="{{playing}}"
     class="live-photo__video"

@@ -3,16 +3,15 @@
 import {
   getCouple,
   getIdentity,
+  getRelationshipMembers,
   updateStartDate,
   updateProfile,
   daysBetween,
-  clearAll,
   getPet,
 } from '../../services/store'
 import { toDisplayUrl } from '../../utils/media-url'
 import { changeAvatarForSlot } from '../../utils/avatar'
 import { ensureCloudReady } from '../../services/page-boot'
-import { bootstrapSession } from '../../services/session'
 import { getAppInstance } from '../../app'
 
 Page({
@@ -26,8 +25,6 @@ Page({
     role: 'A' as 'A' | 'B',
     bound: false,
     partnerWechatId: '',
-    confirmText: '',
-    showClear: false,
     petLabel: '去领养',
   },
 
@@ -41,6 +38,7 @@ Page({
     const couple = getCouple()
     if (!couple) return
     const id = getIdentity()
+    const { me, partner } = getRelationshipMembers()
     let petLabel = '去领养'
     try {
       const pet = await getPet()
@@ -49,12 +47,12 @@ Page({
       /* ignore */
     }
     const [youAvatarSrc, themAvatarSrc] = await Promise.all([
-      toDisplayUrl(couple.memberA.avatarUrl),
-      toDisplayUrl(couple.memberB?.avatarUrl ?? ''),
+      toDisplayUrl(me.avatarUrl),
+      toDisplayUrl(partner?.avatarUrl ?? ''),
     ])
     this.setData({
-      youName: couple.memberA.nickname,
-      themName: couple.memberB?.nickname ?? '尚未加入',
+      youName: me.nickname,
+      themName: partner?.nickname ?? '尚未加入',
       youAvatarSrc,
       themAvatarSrc,
       startDate: couple.startDate,
@@ -127,46 +125,11 @@ Page({
   },
 
   onTapAnniversaries() {
-    wx.navigateTo({ url: '/pages/anniversaries/anniversaries' })
+    wx.navigateTo({ url: '/subpages/anniversaries/anniversaries' })
   },
 
   onTapMap() {
-    wx.navigateTo({ url: '/pages/map/map' })
+    wx.navigateTo({ url: '/subpages/map/map' })
   },
 
-  onTapCheckinHistory() {
-    wx.navigateTo({ url: '/pages/checkin-history/checkin-history' })
-  },
-
-  onTapPrivacy() {
-    wx.navigateTo({ url: '/pages/privacy/privacy' })
-  },
-
-  onConfirmInput(e: WechatMiniprogram.Input) {
-    this.setData({ confirmText: e.detail.value })
-  },
-
-  onToggleClear() {
-    this.setData({ showClear: !this.data.showClear, confirmText: '' })
-  },
-
-  async onConfirmClear() {
-    if (this.data.confirmText.trim() !== '确认') {
-      wx.showToast({ title: '需输入「确认」二字', icon: 'none' })
-      return
-    }
-    wx.showLoading({ title: '清空中' })
-    try {
-      await clearAll()
-      await bootstrapSession()
-      await getAppInstance().runBoot()
-      this.setData({ showClear: false, confirmText: '' })
-      wx.reLaunch({ url: '/pages/setup/setup' })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : '清空失败'
-      wx.showToast({ title: msg, icon: 'none' })
-    } finally {
-      wx.hideLoading()
-    }
-  },
 })

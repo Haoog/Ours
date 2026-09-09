@@ -26,6 +26,6 @@ export async function resolveMomentLivePhotos(
 }
 
 export async function pickMomentCover(m: Moment): Promise<string> {
-  const raw = m.images[0] ?? m.livePhotos?.[0]?.cover ?? ''
+  const raw = m.coverUrl || m.images?.[0] || m.livePhotos?.[0]?.cover || m.videoCover || ''
   return toDisplayUrl(raw)
 }

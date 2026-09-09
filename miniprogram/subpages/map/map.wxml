@@ -1,0 +1,121 @@
+<view class="page grain footprint-page">
+  <view class="footprint-head fade-in">
+    <view class="footprint-head__kicker">
+      <text class="footprint-head__spark">✦</text>
+      <text>我们的足迹</text>
+    </view>
+    <text class="footprint-head__title serif">我们的足迹</text>
+    <text class="footprint-head__sub">每一个地点，都藏着一段只属于你们的时间。</text>
+  </view>
+
+  <view wx:if="{{!empty}}" class="footprint-stats card-soft">
+    <view class="footprint-stat">
+      <text class="footprint-stat__number">{{placeCount}}</text>
+      <text class="footprint-stat__label">个地点</text>
+    </view>
+    <view class="footprint-stat__divider"></view>
+    <view class="footprint-stat">
+      <text class="footprint-stat__number">{{memoryCount}}</text>
+      <text class="footprint-stat__label">段回忆</text>
+    </view>
+    <view class="footprint-stat__divider"></view>
+    <view class="footprint-stat">
+      <text class="footprint-stat__number">{{cityCount}}</text>
+      <text class="footprint-stat__label">座城市</text>
+    </view>
+  </view>
+
+  <view wx:if="{{!empty}}" class="map-card card-soft">
+    <map
+      class="map-card__map"
+      latitude="{{centerLat}}"
+      longitude="{{centerLng}}"
+      scale="{{scale}}"
+      markers="{{markers}}"
+      include-points="{{includePoints}}"
+      show-location="{{false}}"
+      enable-zoom
+      enable-scroll
+      bindmarkertap="onMarkerTap" />
+    <view class="map-card__stamp">
+      <text class="map-card__stamp-mark">♥</text>
+      <text>一起走过</text>
+    </view>
+    <view class="map-card__hint">点一点地图上的足迹</view>
+  </view>
+
+  <view wx:if="{{!empty}}" class="places-section">
+    <view class="places-section__head">
+      <view>
+        <text class="places-section__title">地点故事</text>
+        <text class="places-section__sub">从地图上选一站</text>
+      </view>
+      <text class="places-section__count">{{placeCount}} 站</text>
+    </view>
+
+    <scroll-view class="place-chips" scroll-x enhanced show-scrollbar="{{false}}">
+      <view
+        wx:for="{{places}}"
+        wx:key="id"
+        class="place-chip {{selectedPlaceId === item.id ? 'is-on' : ''}}"
+        data-id="{{item.id}}"
+        hover-class="u-press"
+        bindtap="onTapPlace">
+        <text class="place-chip__mark">♥</text>
+        <text class="place-chip__name">{{item.name}}</text>
+        <text class="place-chip__count">{{item.momentCount}}</text>
+      </view>
+    </scroll-view>
+
+    <view wx:if="{{selectedPlace}}" class="story-card card-soft" hover-class="u-press" bindtap="onTapStory">
+      <view class="story-card__media {{selectedPlace.latestCover ? '' : 'story-card__media--empty'}}">
+        <image
+          wx:if="{{selectedPlace.latestCover}}"
+          class="story-card__image"
+          src="{{selectedPlace.latestCover}}"
+          mode="aspectFill"
+          lazy-load />
+        <view wx:else class="story-card__placeholder">
+          <text class="story-card__placeholder-mark">{{selectedPlace.latestHasVideo ? '▶' : '✦'}}</text>
+          <text>{{selectedPlace.latestHasVideo ? '一段视频回忆' : '这一站，留下过回忆'}}</text>
+        </view>
+        <view wx:if="{{selectedPlace.latestHasVideo}}" class="story-card__media-tag">视频</view>
+      </view>
+      <view class="story-card__body">
+        <view class="story-card__title-row">
+          <text class="story-card__title">{{selectedPlace.name}}</text>
+          <text class="story-card__total">{{selectedPlace.momentCount}} 条回忆</text>
+        </view>
+        <text wx:if="{{selectedPlace.address}}" class="story-card__address">{{selectedPlace.address}}</text>
+        <text class="story-card__content">{{selectedPlace.latestContent || (selectedPlace.latestHasVideo ? '一段视频，等你回看。' : '这一站，也被你们好好记住了。')}}</text>
+        <view class="story-card__foot">
+          <text>{{selectedPlace.latestDateLabel ? '最近记录 · ' + selectedPlace.latestDateLabel : '最近留下的回忆'}}</text>
+          <text wx:if="{{selectedPlace.latestMomentId}}" class="story-card__open">打开回忆 →</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{!empty && cities.length}}" class="city-note card-soft">
+    <view class="city-note__head">
+      <text class="city-note__title">城市小记</text>
+      <text class="city-note__sub">你们的故事正在变多</text>
+    </view>
+    <scroll-view class="city-list" scroll-x enhanced show-scrollbar="{{false}}">
+      <view wx:for="{{cities}}" wx:key="name" class="city-pill">
+        <text class="city-pill__name">{{item.name}}</text>
+        <text class="city-pill__count">{{item.count}} 次</text>
+      </view>
+    </scroll-view>
+  </view>
+
+  <view wx:if="{{empty}}" class="footprint-empty card-soft">
+    <view class="footprint-empty__seal">✦</view>
+    <view class="footprint-empty__cat"><kitty-face size="md" mood="dim" /></view>
+    <text class="footprint-empty__title serif">故事还没走到地图上</text>
+    <text class="footprint-empty__sub">在写回忆时选一个地点，<br />这里就会亮起你们的第一站。</text>
+    <view class="footprint-empty__action" hover-class="u-press" bindtap="onTapCompose">记下第一站 →</view>
+  </view>
+
+  <pet-float />
+</view>

@@ -10,7 +10,7 @@ interface IAppOption {
     petTick: number
   }
   bumpPet(): void
-  runBoot(inviteCoupleId?: string): Promise<void>
+  runBoot(inviteToken?: string): Promise<void>
   waitBoot(): Promise<void>
 }
 
@@ -40,17 +40,16 @@ App<IAppOption>({
     }
 
     const invite =
-      (options?.query?.inviteFrom as string) ||
-      (options?.query?.inviteCoupleId as string) ||
+      (options?.query?.inviteToken as string) ||
       undefined
     bootPromise = this.runBoot(invite)
   },
 
-  async runBoot(inviteCoupleId?: string) {
+  async runBoot(inviteToken?: string) {
     try {
-      const session = await bootstrapSession({ inviteCoupleId })
+      const session = await bootstrapSession({ inviteToken })
       this.globalData.booted = true
-      if (session.status === 'needsSetup') {
+      if (session.status !== 'ready') {
         const pages = getCurrentPages()
         const route = pages[pages.length - 1]?.route ?? ''
         if (route !== 'pages/setup/setup') {
@@ -62,7 +61,7 @@ App<IAppOption>({
       const msg = err instanceof Error ? err.message : '云开发连接失败'
       wx.showModal({
         title: '暂时连不上',
-        content: `${msg}\n\n请确认已部署云函数 ours，并创建数据库集合 couples / moments / checkins。`,
+        content: `${msg}\n\n请确认已部署云函数 ours，并创建 access_codes / space_invites / couples / moments 等集合。`,
         showCancel: false,
       })
     }

@@ -1,26 +1,26 @@
 .pf {
   position: fixed;
-  left: 24rpx;
   z-index: 900;
-  bottom: calc(32rpx + env(safe-area-inset-bottom));
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12rpx;
+  width: 104rpx;
+  height: 104rpx;
+  overflow: visible;
   pointer-events: none;
-}
-
-.pf--tab {
-  bottom: calc(120rpx + env(safe-area-inset-bottom));
 }
 
 .pf--open {
   pointer-events: auto;
 }
 
+.pf--dragging .pf__orb {
+  transform: scale(1.04);
+  box-shadow: 0 10rpx 30rpx rgba(139, 126, 200, 0.4);
+}
+
 .pf__orb {
   pointer-events: auto;
-  position: relative;
+  position: absolute;
+  left: 0;
+  bottom: 0;
   width: 104rpx;
   height: 104rpx;
   border-radius: 50%;
@@ -30,6 +30,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  touch-action: none;
+  user-select: none;
 }
 
 .pf--open .pf__orb {
@@ -50,9 +52,22 @@
 
 .pf__panel {
   pointer-events: auto;
+  position: absolute;
+  left: 0;
+  bottom: calc(104rpx + 12rpx);
   width: 320rpx;
   padding: 20rpx 24rpx;
   animation: pf-in 0.2s ease;
+}
+
+.pf--below .pf__panel {
+  top: calc(104rpx + 12rpx);
+  bottom: auto;
+}
+
+.pf--right .pf__panel {
+  left: auto;
+  right: 0;
 }
 
 @keyframes pf-in {

@@ -37,10 +37,29 @@ export interface PetView {
   message?: string
 }
 
+export interface AccessQuota {
+  maxMoments: number
+  maxStorageBytes: number
+  maxMediaItems: number
+  maxMediaPerMoment: number
+}
+
+export interface AccessUsage {
+  momentCount: number
+  mediaItems: number
+  storageBytes: number
+}
+
 export interface Couple {
   id: string
   startDate: string
   partnerWechatId?: string
+  licenseId?: string
+  planId?: string
+  status?: 'active' | 'suspended' | 'revoked'
+  expiresAt?: number | null
+  quota?: AccessQuota
+  usage?: AccessUsage
   memberA: CoupleMember
   memberB: CoupleMember | null
   streakDays: number
@@ -75,6 +94,8 @@ export interface Moment {
   content: string
   images: string[]
   videos?: string[]
+  /** 普通视频的列表缩略图 fileID / 临时链接 */
+  videoCover?: string
   livePhotos?: MomentLivePhoto[]
   voices?: MomentVoice[]
   location: MomentLocation | null
@@ -95,6 +116,8 @@ export interface Moment {
   commentCount?: number
   likeCount?: number
   likedByMe?: boolean
+  mediaItems?: number
+  mediaBytes?: number
 }
 
 export interface MomentsStats {
@@ -129,18 +152,6 @@ export interface MomentsBriefStats {
   total: number
   countA: number
   countB: number
-}
-
-export type Mood = 'happy' | 'soft' | 'low' | 'rant'
-
-export interface Checkin {
-  id: string
-  date: string
-  openid: string
-  role: 'A' | 'B'
-  mood: Mood | null
-  note: string
-  createdAt: number
 }
 
 export interface Identity {
@@ -214,6 +225,12 @@ export interface MapPlace {
   latitude: number
   longitude: number
   momentCount: number
+  /** 地点卡片展示的最近一条回忆 */
+  latestMomentId?: string
+  latestMomentDate?: string
+  latestMomentContent?: string
+  latestMomentCover?: string
+  latestMomentHasVideo?: boolean
 }
 
 export interface MapCityStat {

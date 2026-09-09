@@ -4,3 +4,7 @@ miniprogram_npm/
 .DS_Store
 *.log
 project.private.config.json.user.*
+admin-web/.env
+admin-web/.env.*
+!admin-web/.env.example
+admin-web/dist/

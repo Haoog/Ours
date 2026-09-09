@@ -4,7 +4,7 @@ Component({
   properties: {
     pet: {
       type: Object,
-      value: null as PetView | null,
+      value: undefined as any,
     },
     compact: {
       type: Boolean,

@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "纪念日",
-  "navigationBarBackgroundColor": "#F5F3FA",
-  "navigationBarTextStyle": "black",
-  "usingComponents": {
-    "kitty-face": "/components/kitty-face/kitty-face"
-  }
-}
