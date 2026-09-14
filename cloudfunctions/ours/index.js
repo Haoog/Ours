@@ -2,6 +2,7 @@
 
 const cloud = require('wx-server-sdk')
 const crypto = require('crypto')
+const https = require('https')
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 
@@ -16,6 +17,9 @@ const DEFAULT_QUOTA = {
   maxMediaItems: 2000,
   maxMediaPerMoment: 12,
 }
+// A versioned usage snapshot lets older spaces be reconciled from their real
+// records before the first write after this quota implementation is deployed.
+const USAGE_VERSION = 2
 
 function todayKey(d = new Date()) {
   const y = d.getFullYear()
@@ -173,6 +177,91 @@ function momentFileIDs(moment = {}) {
   return [...new Set(ids)]
 }
 
+function requestContentLength(url, method = 'HEAD') {
+  return new Promise(resolve => {
+    let settled = false
+    const finish = value => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+
+    let request
+    try {
+      request = https.request(
+        url,
+        {
+          method,
+          headers: method === 'GET' ? { Range: 'bytes=0-0' } : undefined,
+          timeout: 5000,
+        },
+        response => {
+          const contentRange = response.headers['content-range']
+          const rangeMatch = typeof contentRange === 'string' ? contentRange.match(/\/(\d+)$/) : null
+          const contentLength = Number(response.headers['content-length'])
+          const size = rangeMatch ? Number(rangeMatch[1]) : contentLength
+          const status = Number(response.statusCode || 0)
+          response.resume()
+          response.once('end', () => {
+            if (status >= 200 && status < 300 && Number.isFinite(size) && size >= 0) {
+              finish(size)
+            } else {
+              finish(null)
+            }
+          })
+        },
+      )
+      request.once('timeout', () => {
+        request.destroy()
+        finish(null)
+      })
+      request.once('error', () => finish(null))
+      request.end()
+    } catch {
+      finish(null)
+    }
+  })
+}
+
+async function measureCloudFileBytes(fileIDs) {
+  const uniqueIDs = [...new Set(fileIDs.filter(id => typeof id === 'string' && id))]
+  if (!uniqueIDs.length) return 0
+
+  const urls = new Map()
+  for (let i = 0; i < uniqueIDs.length; i += 50) {
+    try {
+      const urlResult = await cloud.getTempFileURL({ fileList: uniqueIDs.slice(i, i + 50) })
+      for (const item of urlResult?.fileList || []) {
+        if (item?.fileID && item?.tempFileURL) urls.set(item.fileID, item.tempFileURL)
+      }
+    } catch {
+      throw new Error('媒体文件大小无法核验，请重试')
+    }
+  }
+  if (urls.size !== uniqueIDs.length) {
+    throw new Error('媒体文件无法读取，请重新选择后重试')
+  }
+
+  const sizes = new Array(uniqueIDs.length)
+  let nextIndex = 0
+  const worker = async () => {
+    while (nextIndex < uniqueIDs.length) {
+      const index = nextIndex++
+      const url = urls.get(uniqueIDs[index])
+      const headSize = await requestContentLength(url)
+      if (headSize !== null) {
+        sizes[index] = headSize
+        continue
+      }
+      const rangedSize = await requestContentLength(url, 'GET')
+      if (rangedSize === null) throw new Error('媒体文件大小无法核验，请重试')
+      sizes[index] = rangedSize
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(12, uniqueIDs.length) }, worker))
+  return sizes.reduce((total, size) => total + size, 0)
+}
+
 function assertMomentMediaBelongsToCouple(coupleId, moment) {
   const allowedPrefix = `/moments/${coupleId}/`
   for (const fileID of momentFileIDs(moment)) {
@@ -232,6 +321,53 @@ async function getAllByWhere(collectionName, where, options = {}) {
   }
 
   return out
+}
+
+function usageFromRecords(moments, rants) {
+  const postMoments = moments.filter(moment => moment.kind !== 'system')
+  const mediaRecords = [...postMoments, ...rants]
+  const mediaItems = mediaRecords.reduce((total, record) => (
+    total + (Number.isFinite(Number(record.mediaItems))
+      ? integerOr(record.mediaItems, 0, 0)
+      : countMomentMedia(record))
+  ), 0)
+  return {
+    momentCount: postMoments.length,
+    mediaItems,
+  }
+}
+
+async function rebuildUsage(coupleId) {
+  const moments = await getAllByWhere('moments', { coupleId })
+  let rants = []
+  try {
+    rants = await getAllByWhere('rants', { coupleId })
+  } catch (error) {
+    if (!/DATABASE_COLLECTION_NOT_EXIST|collection not exist|集合不存在|ResourceNotFound/i.test(`${error?.message || ''}${error?.errMsg || ''}`)) {
+      throw error
+    }
+  }
+  const basicUsage = usageFromRecords(moments, rants)
+  const mediaRecords = [
+    ...moments.filter(moment => moment.kind !== 'system'),
+    ...rants,
+  ]
+  const fileIDs = [
+    ...moments.filter(moment => moment.kind !== 'system').flatMap(collectMomentFileIDs),
+    ...rants.flatMap(collectMomentFileIDs),
+  ]
+  const recordedBytesWithoutFiles = mediaRecords
+    .filter(record => collectMomentFileIDs(record).length === 0)
+    .reduce((total, record) => total + integerOr(record.mediaBytes, 0, 0), 0)
+  return {
+    ...basicUsage,
+    storageBytes: (await measureCloudFileBytes(fileIDs)) + recordedBytesWithoutFiles,
+  }
+}
+
+async function usageForWrite(coupleId, couple) {
+  if (Number(couple?.usageVersion) === USAGE_VERSION) return usageOf(couple)
+  return rebuildUsage(coupleId)
 }
 
 function normalizeMomentTag(tag) {
@@ -387,6 +523,7 @@ async function redeemAccessCode(openid, payload = {}) {
       expiresAt: access.spaceExpiresAt || null,
       quota,
       usage: { momentCount: 0, mediaItems: 0, storageBytes: 0 },
+      usageVersion: USAGE_VERSION,
       streakDays: 0,
       lastStreakDate: null,
       createdAt: Date.now(),
@@ -894,23 +1031,27 @@ async function addMoment(openid, payload = {}) {
     voices: voices || [],
   }
   const mediaItems = countMomentMedia(media)
-  const mediaBytes = integerOr(payload.mediaBytes, 0, 0)
   assertMomentMediaBelongsToCouple(coupleId, media)
   const quota = normalizeQuota(couple.quota || {})
   if (mediaItems > quota.maxMediaPerMoment) {
     throw new Error(`一条动态最多添加 ${quota.maxMediaPerMoment} 个媒体文件`)
   }
-  const currentUsage = usageOf(couple)
+  const currentUsage = await usageForWrite(coupleId, couple)
   if (currentUsage.momentCount >= quota.maxMoments) {
     throw new Error('已达到动态数量额度，请联系管理员')
   }
   if (currentUsage.mediaItems + mediaItems > quota.maxMediaItems) {
     throw new Error('已达到媒体数量额度，请联系管理员')
   }
+  // Never trust a client-reported byte count. The client uploads first, then
+  // this server-side check measures the referenced cloud files before writing
+  // the record and charging the space.
+  const mediaBytes = await measureCloudFileBytes(momentFileIDs(media))
   if (currentUsage.storageBytes + mediaBytes > quota.maxStorageBytes) {
     throw new Error('已达到存储空间额度，请联系管理员')
   }
   const createdAt = Date.now()
+  const legacyUsage = Number(couple?.usageVersion) === USAGE_VERSION ? null : currentUsage
   const data = normalizeMomentFields({
     coupleId,
     kind: 'post',
@@ -934,7 +1075,9 @@ async function addMoment(openid, payload = {}) {
     if (!freshCouple) throw new Error('空间不存在')
     assertAccessActive(freshCouple)
     if (!roleOf(openid, freshCouple)) throw new Error('无权访问该空间')
-    const freshUsage = usageOf(freshCouple)
+    const freshUsage = Number(freshCouple?.usageVersion) === USAGE_VERSION
+      ? usageOf(freshCouple)
+      : legacyUsage || usageOf(freshCouple)
     const freshQuota = normalizeQuota(freshCouple.quota || {})
     if (freshUsage.momentCount >= freshQuota.maxMoments) {
       throw new Error('已达到动态数量额度，请联系管理员')
@@ -954,6 +1097,7 @@ async function addMoment(openid, payload = {}) {
           mediaItems: freshUsage.mediaItems + mediaItems,
           storageBytes: freshUsage.storageBytes + mediaBytes,
         },
+        usageVersion: USAGE_VERSION,
       },
     })
   })
@@ -1018,10 +1162,14 @@ async function insertCheckinSystemMoment(coupleId, date, streakDays) {
 
 async function deleteMoment(openid, payload = {}) {
   const { coupleId, momentId } = payload
-  await requireMember(openid, coupleId)
+  const { couple } = await requireMember(openid, coupleId)
   const res = await db.collection('moments').doc(momentId).get()
   if (!res.data || res.data.coupleId !== coupleId) throw new Error('动态不存在')
   const fileIDs = collectMomentFileIDs(res.data)
+  const mediaBytes = fileIDs.length
+    ? await measureCloudFileBytes(fileIDs)
+    : integerOr(res.data.mediaBytes, 0, 0)
+  const reconciledUsage = await usageForWrite(coupleId, couple)
   await deleteCloudFiles(fileIDs)
   await db.runTransaction(async transaction => {
     const momentRes = await transaction.collection('moments').doc(momentId).get()
@@ -1030,15 +1178,18 @@ async function deleteMoment(openid, payload = {}) {
     const coupleRes = await transaction.collection('couples').doc(coupleId).get()
     const couple = coupleRes.data
     if (!couple) throw new Error('空间不存在')
-    const usage = usageOf(couple)
+    const usage = Number(couple?.usageVersion) === USAGE_VERSION
+      ? usageOf(couple)
+      : reconciledUsage
     await transaction.collection('moments').doc(momentId).remove()
     await transaction.collection('couples').doc(coupleId).update({
       data: {
         usage: {
           momentCount: Math.max(0, usage.momentCount - 1),
-          mediaItems: Math.max(0, usage.mediaItems - countMomentMedia(moment)),
-          storageBytes: Math.max(0, usage.storageBytes - integerOr(moment.mediaBytes, 0, 0)),
+          mediaItems: Math.max(0, usage.mediaItems - integerOr(moment.mediaItems, countMomentMedia(moment), 0)),
+          storageBytes: Math.max(0, usage.storageBytes - mediaBytes),
         },
+        ...(Number(couple?.usageVersion) === USAGE_VERSION ? {} : { usageVersion: USAGE_VERSION }),
       },
     })
   })
@@ -1253,12 +1404,12 @@ async function addRant(openid, payload = {}) {
   const imgs = (images || []).slice(0, 3)
   assertMomentMediaBelongsToCouple(coupleId, { images: imgs })
   const mediaItems = imgs.length
-  const mediaBytes = integerOr(payload.mediaBytes, 0, 0)
-  const usage = usageOf(couple)
+  const usage = await usageForWrite(coupleId, couple)
   const quota = normalizeQuota(couple.quota || {})
   if (usage.mediaItems + mediaItems > quota.maxMediaItems) {
     throw new Error('已达到媒体数量额度，请联系管理员')
   }
+  const mediaBytes = await measureCloudFileBytes(imgs)
   if (usage.storageBytes + mediaBytes > quota.maxStorageBytes) {
     throw new Error('已达到存储空间额度，请联系管理员')
   }
@@ -1272,6 +1423,7 @@ async function addRant(openid, payload = {}) {
     authorRole: role,
     createdAt: Date.now(),
   }
+  const legacyUsage = Number(couple?.usageVersion) === USAGE_VERSION ? null : usage
   let res
   await db.runTransaction(async transaction => {
     const coupleRes = await transaction.collection('couples').doc(coupleId).get()
@@ -1279,7 +1431,9 @@ async function addRant(openid, payload = {}) {
     if (!freshCouple) throw new Error('空间不存在')
     assertAccessActive(freshCouple)
     if (!roleOf(openid, freshCouple)) throw new Error('无权访问该空间')
-    const freshUsage = usageOf(freshCouple)
+    const freshUsage = Number(freshCouple?.usageVersion) === USAGE_VERSION
+      ? usageOf(freshCouple)
+      : legacyUsage || usageOf(freshCouple)
     const freshQuota = normalizeQuota(freshCouple.quota || {})
     if (freshUsage.mediaItems + mediaItems > freshQuota.maxMediaItems) {
       throw new Error('已达到媒体数量额度，请联系管理员')
@@ -1295,6 +1449,7 @@ async function addRant(openid, payload = {}) {
           mediaItems: freshUsage.mediaItems + mediaItems,
           storageBytes: freshUsage.storageBytes + mediaBytes,
         },
+        usageVersion: USAGE_VERSION,
       },
     })
   })
@@ -1303,10 +1458,15 @@ async function addRant(openid, payload = {}) {
 
 async function deleteRant(openid, payload = {}) {
   const { coupleId, rantId } = payload
-  const { role } = await requireMember(openid, coupleId)
+  const { role, couple: memberCouple } = await requireMember(openid, coupleId)
   const res = await db.collection('rants').doc(rantId).get()
   if (!res.data || res.data.coupleId !== coupleId) throw new Error('吐槽不存在')
-  await deleteCloudFiles((res.data.images || []).filter(id => id && id.startsWith('cloud://')))
+  const fileIDs = (res.data.images || []).filter(id => id && id.startsWith('cloud://'))
+  const mediaBytes = fileIDs.length
+    ? await measureCloudFileBytes(fileIDs)
+    : integerOr(res.data.mediaBytes, 0, 0)
+  const reconciledUsage = await usageForWrite(coupleId, memberCouple)
+  await deleteCloudFiles(fileIDs)
   await db.runTransaction(async transaction => {
     const rantRes = await transaction.collection('rants').doc(rantId).get()
     const rant = rantRes.data
@@ -1314,15 +1474,18 @@ async function deleteRant(openid, payload = {}) {
     const coupleRes = await transaction.collection('couples').doc(coupleId).get()
     const couple = coupleRes.data
     if (!couple) throw new Error('空间不存在')
-    const usage = usageOf(couple)
+    const usage = Number(couple?.usageVersion) === USAGE_VERSION
+      ? usageOf(couple)
+      : reconciledUsage
     await transaction.collection('rants').doc(rantId).remove()
     await transaction.collection('couples').doc(coupleId).update({
       data: {
         usage: {
           ...usage,
           mediaItems: Math.max(0, usage.mediaItems - integerOr(rant.mediaItems, (rant.images || []).length, 0)),
-          storageBytes: Math.max(0, usage.storageBytes - integerOr(rant.mediaBytes, 0, 0)),
+          storageBytes: Math.max(0, usage.storageBytes - mediaBytes),
         },
+        ...(Number(couple?.usageVersion) === USAGE_VERSION ? {} : { usageVersion: USAGE_VERSION }),
       },
     })
   })
@@ -1536,7 +1699,12 @@ async function wipeMomentsAndCheckins(coupleId) {
     await db.collection('checkins').doc(c._id).remove()
   }
   await db.collection('couples').doc(coupleId).update({
-    data: { streakDays: 0, lastStreakDate: null },
+    data: {
+      streakDays: 0,
+      lastStreakDate: null,
+      usage: { momentCount: 0, mediaItems: 0, storageBytes: 0 },
+      usageVersion: USAGE_VERSION,
+    },
   })
 }
 
@@ -1702,6 +1870,15 @@ async function seedDemoData(openid, payload = {}) {
     throw new Error('演示数据仅可在开发版/体验版使用')
   }
   const { couple, role } = await requireMember(openid, coupleId)
+  // Demo data is still real data in the database, so it must not silently
+  // create more records than the space's configured quota.
+  const quota = normalizeQuota(couple.quota || {})
+  const existingUsage = reset
+    ? { momentCount: 0, mediaItems: 0, storageBytes: 0 }
+    : await usageForWrite(coupleId, couple)
+  if (existingUsage.momentCount + 22 + 1 > quota.maxMoments) {
+    throw new Error('当前动态额度不足以生成演示数据，请先提高额度')
+  }
   if (reset) await wipeMomentsAndCheckins(coupleId)
 
   const annList = [
@@ -1859,6 +2036,13 @@ async function seedDemoData(openid, payload = {}) {
   demoPet.happiness = 88
   demoPet.lastFedDate = todayKey()
   await db.collection('couples').doc(coupleId).update({ data: { pet: demoPet } })
+  const finalUsage = await rebuildUsage(coupleId)
+  await db.collection('couples').doc(coupleId).update({
+    data: {
+      usage: finalUsage,
+      usageVersion: USAGE_VERSION,
+    },
+  })
 
   return {
     moments: momentCount,
