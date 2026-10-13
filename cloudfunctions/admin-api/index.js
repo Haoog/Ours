@@ -285,7 +285,9 @@ async function mapWithConcurrency(items, worker, concurrency = USAGE_CONCURRENCY
 async function hydrateSpaces(documents) {
   return mapWithConcurrency(documents, async document => {
     const id = documentId(document)
-    const usage = await getSpaceUsage(id, document.usage)
+    const usage = Number(document.usageVersion) === 2
+      ? normalizeUsage(document.usage)
+      : await getSpaceUsage(id, document.usage)
     return mapSpace(document, usage)
   })
 }
@@ -578,7 +580,9 @@ async function updateSpaceQuota(payload = {}) {
     quotaUpdatedAt: verifiedDocument.quotaUpdatedAt || updatedAt,
     _id: documentId(verifiedDocument) || coupleId,
   }
-  const responseUsage = await getSpaceUsage(coupleId, responseDocument.usage)
+  const responseUsage = Number(responseDocument.usageVersion) === 2
+    ? normalizeUsage(responseDocument.usage)
+    : await getSpaceUsage(coupleId, responseDocument.usage)
 
   return {
     coupleId,
@@ -620,7 +624,9 @@ async function getSpaceDetail(payload = {}) {
     const licenseRes = await db.collection('access_codes').doc(document.licenseId).get().catch(() => ({ data: null }))
     license = omitId(licenseRes.data)
   }
-  const usage = await getSpaceUsage(coupleId, document.usage)
+  const usage = Number(document.usageVersion) === 2
+    ? normalizeUsage(document.usage)
+    : await getSpaceUsage(coupleId, document.usage)
   return { space: mapSpace(document, usage), license }
 }
 
@@ -681,10 +687,10 @@ async function listMoments(payload = {}) {
   const query = db.collection('moments').where({ coupleId })
   let res
   try {
-    res = await query.orderBy('sortAt', 'desc').skip(skip).limit(limit).get()
+    res = await query.orderBy('momentDate', 'desc').orderBy('createdAt', 'desc').orderBy('_id', 'desc').skip(skip).limit(limit).get()
   } catch {
     res = await db.collection('moments').where({ coupleId }).skip(skip).limit(limit).get()
-    res.data.sort((a, b) => (b.sortAt || b.createdAt || 0) - (a.sortAt || a.createdAt || 0))
+    res.data.sort((a, b) => String(b.momentDate || '').localeCompare(String(a.momentDate || '')) || (b.createdAt || 0) - (a.createdAt || 0))
   }
   const total = (await db.collection('moments').where({ coupleId }).count()).total || 0
   const ids = [...new Set(res.data.flatMap(collectMediaIDs))]
@@ -754,6 +760,7 @@ function collectSpaceFileIDs(coupleId, couple, moments, rants) {
     const allowed = [
       `/moments/${coupleId}/`,
       `/avatars/${coupleId}/`,
+      `/backups/${coupleId}/`,
     ]
     if (allowed.some(prefix => fileID.includes(prefix))) ids.push(fileID)
   }
@@ -766,6 +773,9 @@ function collectSpaceFileIDs(coupleId, couple, moments, rants) {
   }
   push(couple?.memberA?.avatarUrl)
   push(couple?.memberB?.avatarUrl)
+  for (const task of Object.values(couple?.mediaCleanup || {})) {
+    for (const fileID of task.fileIDs || []) push(fileID)
+  }
   return [...new Set(ids)]
 }
 
@@ -776,7 +786,10 @@ async function deleteCloudFiles(fileIDs) {
   for (let i = 0; i < uniqueIDs.length; i += batchSize) {
     const batch = uniqueIDs.slice(i, i + batchSize)
     try {
-      await app.deleteFile({ fileList: batch })
+      const result = await app.deleteFile({ fileList: batch })
+      failed += (result.fileList || []).filter(item => (
+        item.code && item.code !== 'SUCCESS' && item.code !== 'STORAGE_FILE_NONEXIST'
+      )).length
     } catch (error) {
       failed += batch.length
       console.warn('delete space media failed', error?.message || error)
@@ -801,7 +814,10 @@ async function deleteSpace(payload = {}) {
   }
   const moments = records.moments || []
   const rants = records.rants || []
-  const fileIDs = collectSpaceFileIDs(coupleId, couple, moments, rants)
+  const fileIDs = [...new Set([
+    ...collectSpaceFileIDs(coupleId, couple, moments, rants), ...(couple.pendingDeleteFiles || []),
+  ])]
+  await db.collection('couples').doc(coupleId).update({ pendingDeleteFiles: fileIDs })
 
   for (const collectionName of SPACE_CHILD_COLLECTIONS) {
     await removeDocuments(collectionName, records[collectionName] || [])
@@ -815,9 +831,11 @@ async function deleteSpace(payload = {}) {
     }
   }
   await removeDocuments('access_codes', linkedCodes)
-  await db.collection('couples').doc(coupleId).remove()
-
   const fileResult = await deleteCloudFiles(fileIDs)
+  if (fileResult.failed) {
+    throw new Error(`记录已删除，仍有 ${fileResult.failed} 个媒体文件待清理，请再次执行删除以重试`)
+  }
+  await db.collection('couples').doc(coupleId).remove()
   const deletedRecords = Object.values(records).reduce((total, list) => total + list.length, 0)
   return {
     coupleId,
@@ -846,6 +864,7 @@ async function overview() {
     accessCodes: codes.total || 0,
     moments: usage.momentCount,
     storageBytes: usage.storageBytes,
+    activeSpaces: hydratedSpaces.filter(space => space.status === 'active').length,
   }
 }
 

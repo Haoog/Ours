@@ -15,8 +15,8 @@ export function dateKeyFromTs(ts: number): string {
 }
 
 export function sortAtForMomentDate(momentDate: string, createdAt: number): number {
-  const base = new Date(`${momentDate}T12:00:00`).getTime()
-  return base + Math.min(createdAt % 60000, 59999)
+  const base = new Date(`${momentDate}T00:00:00+08:00`).getTime()
+  return base + (createdAt + 8 * 3600000) % 86400000
 }
 
 export function momentDateOf(m: MomentTiming): string {
@@ -25,8 +25,7 @@ export function momentDateOf(m: MomentTiming): string {
 }
 
 export function momentDisplayAt(m: MomentTiming): number {
-  if (m.sortAt) return m.sortAt
-  return sortAtForMomentDate(momentDateOf(m), m.createdAt)
+  return new Date(`${momentDateOf(m)}T12:00:00`).getTime()
 }
 
 export function isBackdatedMoment(m: MomentTiming): boolean {

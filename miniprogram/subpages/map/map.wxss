@@ -93,7 +93,7 @@
   color: var(--c-accent-deep);
   font-size: 20rpx;
   letter-spacing: 1rpx;
-  box-shadow: 0 6rpx 16rpx rgba(74, 68, 88, 0.1);
+  box-shadow: 0 6rpx 16rpx rgba(var(--c-text-rgb), 0.1);
   pointer-events: none;
 }
 .map-card__stamp-mark {
@@ -166,7 +166,7 @@
   border-color: transparent;
   background: var(--c-accent-soft);
   color: var(--c-accent-deep);
-  box-shadow: 0 6rpx 16rpx rgba(110, 98, 168, 0.1);
+  box-shadow: 0 6rpx 16rpx rgba(var(--c-deep-rgb), 0.1);
 }
 .place-chip__mark {
   color: #C97991;
@@ -185,7 +185,7 @@
   height: 28rpx;
   padding: 0 7rpx;
   border-radius: var(--r-pill);
-  background: rgba(110, 98, 168, 0.1);
+  background: rgba(var(--c-deep-rgb), 0.1);
   font-size: 18rpx;
   line-height: 28rpx;
   text-align: center;
@@ -323,6 +323,7 @@
   padding: 48rpx 28rpx 42rpx;
   text-align: center;
 }
+.footprint-all { padding: 20rpx 0; text-align: center; color: var(--c-accent-deep); font-size: 26rpx; }
 .footprint-empty__seal {
   display: flex;
   align-items: center;
@@ -335,11 +336,6 @@
   color: var(--c-accent);
   font-size: 32rpx;
   background: var(--c-surface-soft);
-}
-.footprint-empty__cat {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 20rpx;
 }
 .footprint-empty__title {
   display: block;

@@ -1,6 +1,5 @@
-<view class="page grain">
+<view class="page grain" style="{{themeStyle}}">
   <view class="hero fade-in">
-    <kitty-face size="lg" mood="awake" />
     <text class="hero__tag tag tag--accent">Ours</text>
     <text class="hero__title serif">激活我们的空间</text>
     <text class="hero__sub">请输入管理员提供的邀请码后开始使用</text>

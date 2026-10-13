@@ -8,12 +8,12 @@
 
 .hero__title {
   font-size: 40rpx;
-  color: var(--text);
+  color: var(--c-text);
 }
 
 .hero__sub {
   font-size: 24rpx;
-  color: var(--text-muted);
+  color: var(--c-muted);
   text-align: center;
   line-height: 1.5;
   padding: 0 24rpx;
@@ -23,7 +23,7 @@
   margin: 0 32rpx 20rpx;
   padding: 22rpx 24rpx;
   font-size: 24rpx;
-  color: var(--c-muted, rgba(74, 68, 88, 0.65));
+  color: var(--c-muted, rgba(var(--c-text-rgb), 0.65));
   line-height: 1.65;
 }
 
@@ -34,7 +34,7 @@
 
 .field {
   padding: 20rpx 0;
-  border-bottom: 1rpx solid rgba(139, 126, 200, 0.12);
+  border-bottom: 1rpx solid rgba(var(--c-accent-rgb), 0.12);
 }
 
 .field:last-child {
@@ -44,13 +44,13 @@
 .field__label {
   display: block;
   font-size: 24rpx;
-  color: var(--text-muted);
+  color: var(--c-muted);
   margin-bottom: 12rpx;
 }
 
 .field__input {
   font-size: 30rpx;
-  color: var(--text);
+  color: var(--c-text);
 }
 
 .field__input--code {
@@ -80,7 +80,7 @@
   padding: 0;
   margin: 0;
   border-radius: 50%;
-  background: rgba(139, 126, 200, 0.1);
+  background: rgba(var(--c-accent-rgb), 0.1);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -99,13 +99,13 @@
 
 .avatar-pick__ph {
   font-size: 44rpx;
-  color: var(--accent);
+  color: var(--c-accent-deep);
   line-height: 1;
 }
 
 .field__val {
   font-size: 30rpx;
-  color: var(--accent);
+  color: var(--c-accent-deep);
 }
 
 .btn-action {

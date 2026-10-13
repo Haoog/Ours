@@ -2,14 +2,13 @@
 
 import { CLOUD_ENV_ID } from './config/env'
 import { bootstrapSession, getSession } from './services/session'
+import { applyThemeChrome } from './services/theme'
 
 interface IAppOption {
   globalData: {
     envVersion: string
     booted: boolean
-    petTick: number
   }
-  bumpPet(): void
   runBoot(inviteToken?: string): Promise<void>
   waitBoot(): Promise<void>
 }
@@ -20,11 +19,6 @@ App<IAppOption>({
   globalData: {
     envVersion: '0.1.0',
     booted: false,
-    petTick: 0,
-  },
-
-  bumpPet() {
-    this.globalData.petTick += 1
   },
 
   onLaunch(options) {
@@ -33,6 +27,7 @@ App<IAppOption>({
       return
     }
     wx.cloud.init({ env: CLOUD_ENV_ID, traceUser: true })
+    applyThemeChrome()
 
     const info = wx.getAccountInfoSync?.()
     if (info?.miniProgram?.envVersion) {
@@ -43,6 +38,14 @@ App<IAppOption>({
       (options?.query?.inviteToken as string) ||
       undefined
     bootPromise = this.runBoot(invite)
+  },
+
+  onShow(options) {
+    const invite = options?.query?.inviteToken
+    if (!this.globalData.booted || !invite || getSession()?.status === 'ready') return
+    bootPromise = this.runBoot(String(invite)).then(() => {
+      if (getSession()?.status === 'ready') wx.reLaunch({ url: '/pages/home/home' })
+    })
   },
 
   async runBoot(inviteToken?: string) {
@@ -61,7 +64,7 @@ App<IAppOption>({
       const msg = err instanceof Error ? err.message : '云开发连接失败'
       wx.showModal({
         title: '暂时连不上',
-        content: `${msg}\n\n请确认已部署云函数 ours，并创建 access_codes / space_invites / couples / moments 等集合。`,
+        content: `${msg}\n\n请稍后重试；如果仍无法连接，请联系管理员。`,
         showCancel: false,
       })
     }
@@ -74,8 +77,4 @@ App<IAppOption>({
 
 export function getAppInstance(): IAppOption {
   return getApp<IAppOption>()
-}
-
-export function isSessionReady(): boolean {
-  return getSession()?.status === 'ready'
 }

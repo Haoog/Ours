@@ -15,12 +15,7 @@
   gap: 16rpx;
   align-items: center;
   text-align: center;
-  background: linear-gradient(165deg, #F5F3FA 0%, #EDE9F6 100%);
-}
-.poster__cat {
-  margin-bottom: 12rpx;
-  display: flex;
-  justify-content: center;
+  background: linear-gradient(165deg, var(--c-bg) 0%, var(--c-surface-soft) 100%);
 }
 .poster__tag { font-size: 24rpx; }
 .poster__title {
@@ -72,7 +67,7 @@
   width: 100%;
   height: 92rpx;
   border-radius: var(--r-pill);
-  background: linear-gradient(160deg, #9B8ECF, #6E62A8);
+  background: var(--c-accent-gradient);
   color: #fff;
   font-size: 30rpx;
   font-weight: 500;
@@ -80,7 +75,7 @@
   align-items: center;
   justify-content: center;
   border: none;
-  box-shadow: 0 10rpx 32rpx rgba(110, 98, 168, 0.3);
+  box-shadow: 0 10rpx 32rpx var(--c-accent-shadow);
 }
 .share-btn::after { border: none; }
 

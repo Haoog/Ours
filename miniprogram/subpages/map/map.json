@@ -3,6 +3,6 @@
   "navigationBarBackgroundColor": "#F5F3FA",
   "navigationBarTextStyle": "black",
   "usingComponents": {
-    "kitty-face": "/components/kitty-face/kitty-face"
+    "footprint-map": "/components/footprint-map/footprint-map"
   }
 }

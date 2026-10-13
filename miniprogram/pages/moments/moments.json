@@ -7,7 +7,7 @@
   "onReachBottomDistance": 120,
   "backgroundTextStyle": "dark",
   "usingComponents": {
-    "kitty-face": "/components/kitty-face/kitty-face",
+    "footprint-map": "/components/footprint-map/footprint-map",
     "live-photo": "/components/live-photo/live-photo"
   }
 }

@@ -2,6 +2,7 @@
 
 import { resolveCloudUrl } from '../services/store'
 import { Moment } from '../services/types'
+import { resolveCloudUrls } from './cloud-url-cache'
 
 export async function toDisplayUrl(fileIDOrPath: string): Promise<string> {
   if (!fileIDOrPath) return ''
@@ -10,19 +11,19 @@ export async function toDisplayUrl(fileIDOrPath: string): Promise<string> {
 }
 
 export async function resolveMomentImages(images: string[]): Promise<string[]> {
-  return Promise.all(images.map(toDisplayUrl))
+  const urls = await resolveCloudUrls(images)
+  return images.map(id => urls[id] || '').filter(Boolean)
 }
 
 export async function resolveMomentLivePhotos(
   livePhotos: { cover: string; video: string; duration: number }[],
 ): Promise<{ cover: string; video: string; duration: number }[]> {
-  return Promise.all(
-    livePhotos.map(async lp => ({
-      cover: await toDisplayUrl(lp.cover),
+  const covers = await resolveCloudUrls(livePhotos.map(item => item.cover))
+  return livePhotos.map(lp => ({
+      cover: covers[lp.cover] || '',
       video: lp.video,
       duration: lp.duration,
-    })),
-  )
+    }))
 }
 
 export async function pickMomentCover(m: Moment): Promise<string> {

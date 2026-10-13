@@ -1,10 +1,7 @@
-<view class="page grain">
+<view class="page grain" style="{{themeStyle}}">
   <view class="head fade-in">
-    <view class="head__cat">
-      <kitty-face size="md" mood="awake" />
-    </view>
-    <text class="head__tag tag tag--accent">记一条</text>
-    <text class="head__title serif">写下这一刻</text>
+    <text class="head__tag tag tag--accent">{{editing ? '编辑回忆' : '记一条'}}</text>
+    <text class="head__title serif">{{editing ? '把这一刻补完整' : '写下这一刻'}}</text>
     <text class="head__sub">可选过去的日期，补录以前的回忆</text>
   </view>
 
@@ -14,12 +11,14 @@
       placeholder="文字、心情、今天发生的事……"
       placeholder-style="color: rgba(74,68,88,0.35)"
       value="{{content}}"
+      disabled="{{posting || pendingResult}}"
       bindinput="onContentInput"
       maxlength="-1"
       auto-height />
   </view>
 
-  <view class="media-bar card-soft">
+  <view wx:if="{{pendingResult}}" class="media-hint">保存结果待确认，请重试确认这一条回忆。</view>
+  <view class="media-bar card-soft" wx:if="{{!editing && !pendingResult}}">
     <view class="media-bar__btn" bindtap="onPickAlbum">
       <text class="media-bar__icon">＋</text>
       <text>相册</text>
@@ -37,24 +36,35 @@
       <text>{{recording ? recordSec + 's' : '语音'}}</text>
     </view>
   </view>
-  <text class="media-hint">支持实况 / GIF / 多图，可与长视频、语音混发；实况请点 Live 或相册里带实况效果的照片</text>
+  <text class="media-hint" wx:if="{{!editing}}">还可添加 {{mediaRemaining}} 个媒体文件</text>
 
   <view class="live-list" wx:if="{{livePhotos.length > 0}}">
     <view class="live-list__item" wx:for="{{livePhotos}}" wx:key="id">
       <view class="live-list__frame">
         <live-photo cover="{{item.cover}}" video="{{item.video}}" duration="{{item.duration}}" />
       </view>
-      <view class="live-list__remove" data-id="{{item.id}}" bindtap="onRemoveLivePhoto">删除实况</view>
+      <view wx:if="{{!editing && !pendingResult}}" class="live-list__remove" data-id="{{item.id}}" bindtap="onRemoveLivePhoto">删除实况</view>
     </view>
   </view>
 
   <view class="grid" wx:if="{{images.length > 0}}">
-    <view class="grid__cell" wx:for="{{images}}" wx:key="*this" wx:for-item="src">
+    <view
+      class="grid__cell {{draggingImageIndex === index ? 'is-dragging' : ''}}"
+      wx:for="{{images}}"
+      wx:key="*this"
+      wx:for-item="src"
+      wx:for-index="index"
+      data-index="{{index}}"
+      catchtouchmove="onImageTouchMove"
+      catchtouchend="onImageTouchEnd"
+      catchtouchcancel="onImageTouchEnd"
+      bindlongpress="onLongPressImage"
+    >
       <image src="{{src}}" mode="aspectFill" lazy-load="true"></image>
       <view class="grid__badge" wx:if="{{src.indexOf('.gif') !== -1 || src.indexOf('.GIF') !== -1}}">动图</view>
-      <view class="grid__remove" data-src="{{src}}" bindtap="onRemoveImage">×</view>
+      <view wx:if="{{!editing && !pendingResult}}" class="grid__remove" data-index="{{index}}" catchtap="onRemoveImage">×</view>
     </view>
-    <view class="grid__cell grid__cell--add" bindtap="onPickAlbum">
+    <view wx:if="{{!editing && !pendingResult && mediaRemaining > 0}}" class="grid__cell grid__cell--add" bindtap="onPickAlbum">
       <text class="grid__add-icon">+</text>
       <text class="grid__cell__hint">{{images.length}} 张 · 继续加</text>
     </view>
@@ -62,13 +72,13 @@
 
   <view class="video-box card-soft" wx:if="{{video}}">
     <video class="video-box__player" src="{{video}}" poster="{{videoCover}}" controls show-center-play-btn></video>
-    <view class="video-box__remove" bindtap="onRemoveVideo">删除视频</view>
+    <view wx:if="{{!editing && !pendingResult}}" class="video-box__remove" bindtap="onRemoveVideo">删除视频</view>
   </view>
 
   <view class="voice-box card-soft" wx:if="{{voice}}">
     <view class="voice-box__wave">〰</view>
     <text class="voice-box__dur">{{voice.duration}} 秒语音</text>
-    <view class="voice-box__remove" bindtap="onRemoveVoice">删除</view>
+    <view wx:if="{{!editing && !pendingResult}}" class="voice-box__remove" bindtap="onRemoveVoice">删除</view>
   </view>
 
   <view class="tags card-soft">
@@ -84,7 +94,7 @@
   </view>
 
   <view class="meta card-soft">
-    <picker mode="date" value="{{momentDate}}" start="{{minMomentDate}}" end="{{maxMomentDate}}" bindchange="onPickMomentDate">
+    <picker mode="date" disabled="{{pendingResult}}" value="{{momentDate}}" start="{{minMomentDate}}" end="{{maxMomentDate}}" bindchange="onPickMomentDate">
       <view class="meta__row">
         <text class="meta__label">回忆日期</text>
         <text class="meta__val accent">{{momentDateLabel}} →</text>
@@ -100,14 +110,14 @@
     </view>
     <view class="meta__row">
       <text class="meta__label">记录人</text>
-      <text class="meta__val role-{{role === 'A' ? 'you' : 'them'}}">{{role === 'A' ? '我' : '她'}}</text>
+      <text class="meta__val">我</text>
     </view>
   </view>
 
   <view class="actions">
     <view class="btn-action btn-action--ghost" hover-class="u-press" bindtap="onCancel">取消</view>
     <view class="btn-action {{canPost && !posting ? '' : 'is-disabled'}}" hover-class="u-press" bindtap="onSubmit">
-      {{posting ? '保存中…' : '保存'}}
+      {{posting ? '保存中…' : pendingResult ? '重试确认' : '保存'}}
     </view>
   </view>
 
@@ -119,9 +129,8 @@
         <view class="upload-bar__fill" style="width: {{uploadProgress}}%;"></view>
       </view>
       <text class="upload-panel__pct">{{uploadProgress}}%</text>
-      <view class="upload-panel__cancel" hover-class="u-press" bindtap="onCancelUpload">取消上传</view>
+      <view wx:if="{{!editing && uploadProgress < 98}}" class="upload-panel__cancel" hover-class="u-press" bindtap="onCancelUpload">取消上传</view>
     </view>
   </view>
 
-  <pet-float />
 </view>

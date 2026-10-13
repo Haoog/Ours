@@ -6,37 +6,6 @@ export interface CoupleMember {
   avatarUrl: string
 }
 
-export type PetSpecies = 'cat'
-export type PetMood = 'happy' | 'normal' | 'hungry' | 'sleepy'
-export type PetStage = 'baby' | 'teen' | 'adult'
-
-export interface CouplePet {
-  name: string
-  species: PetSpecies
-  exp: number
-  happiness: number
-  lastFedDate: string
-  lastPetDate: string
-  adoptedAt: number
-}
-
-export interface PetView {
-  adopted: boolean
-  name?: string
-  species?: PetSpecies
-  exp?: number
-  happiness?: number
-  mood?: PetMood
-  level?: number
-  stage?: PetStage
-  expCurrent?: number
-  expNeed?: number
-  canFeed?: boolean
-  canPet?: boolean
-  expPercent?: number
-  message?: string
-}
-
 export interface AccessQuota {
   maxMoments: number
   maxStorageBytes: number
@@ -65,7 +34,6 @@ export interface Couple {
   streakDays: number
   lastStreakDate: string | null
   createdAt: number
-  pet?: CouplePet
 }
 
 export interface MomentLocation {

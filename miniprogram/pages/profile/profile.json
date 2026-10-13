@@ -2,8 +2,5 @@
   "navigationBarTitleText": "我们",
   "navigationBarBackgroundColor": "#F5F3FA",
   "navigationBarTextStyle": "black",
-  "backgroundColor": "#F5F3FA",
-  "usingComponents": {
-    "kitty-face": "/components/kitty-face/kitty-face"
-  }
+  "backgroundColor": "#F5F3FA"
 }

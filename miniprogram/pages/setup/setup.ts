@@ -4,6 +4,7 @@ import { redeemAccessCode } from '../../services/store'
 import { getSession } from '../../services/session'
 import { getAppInstance } from '../../app'
 import { saveMyAvatar } from '../../utils/avatar'
+import { getThemeStyle, syncTheme } from '../../services/theme'
 
 function defaultStartDate(): string {
   const d = new Date()
@@ -15,6 +16,7 @@ function defaultStartDate(): string {
 
 Page({
   data: {
+    themeStyle: getThemeStyle(),
     accessCode: '',
     nickname: '你',
     avatarUrl: '',
@@ -27,6 +29,7 @@ Page({
   avatarTempPath: '',
 
   async onLoad() {
+    syncTheme(this)
     await getAppInstance().waitBoot()
     const session = getSession()
     if (session?.status === 'ready') {

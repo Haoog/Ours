@@ -4,6 +4,8 @@ import { listMapPlaces } from '../../services/store'
 import { ensureCloudReady } from '../../services/page-boot'
 import { getAppInstance } from '../../app'
 import { MapPlace, MapCityStat } from '../../services/types'
+import { getThemeStyle, getThemeId, syncTheme } from '../../services/theme'
+import { openMomentsContext } from '../../services/moments-list-state'
 
 interface PlaceVO extends MapPlace {
   latestDateLabel: string
@@ -30,54 +32,15 @@ function toPlaceVO(place: MapPlace): PlaceVO {
   }
 }
 
-function markersFor(places: PlaceVO[], selectedId = ''): any[] {
-  return places.map((place, index) => {
-    const selected = place.id === selectedId
-    return {
-      id: index + 1,
-      latitude: place.latitude,
-      longitude: place.longitude,
-      title: place.name,
-      width: selected ? 32 : 28,
-      height: selected ? 32 : 28,
-      label: {
-        content: `♥ ${place.momentCount}`,
-        color: selected ? '#FFFFFF' : '#6E62A8',
-        fontSize: 11,
-        borderWidth: 0,
-        borderRadius: 12,
-        bgColor: selected ? '#6E62A8' : '#FFFFFF',
-        padding: 4,
-        textAlign: 'center',
-        anchorX: 0,
-        anchorY: -28,
-      },
-      callout: {
-        content: `${place.name} · ${place.momentCount} 条回忆`,
-        color: '#4A4458',
-        fontSize: 12,
-        borderWidth: 1,
-        borderRadius: 12,
-        borderColor: '#E7E1F1',
-        bgColor: '#FFFFFF',
-        padding: 6,
-        display: selected ? 'ALWAYS' : 'BYCLICK',
-        textAlign: 'center',
-      },
-    }
-  })
-}
-
 Page({
   data: {
+    themeStyle: getThemeStyle(),
+    themeId: getThemeId(),
+    loading: true,
+    loadError: '',
     places: [] as PlaceVO[],
     cities: [] as MapCityStat[],
-    markers: [] as any[],
-    includePoints: [] as { latitude: number; longitude: number }[],
     empty: true,
-    centerLat: 31.23,
-    centerLng: 121.47,
-    scale: 10,
     placeCount: 0,
     memoryCount: 0,
     cityCount: 0,
@@ -86,6 +49,8 @@ Page({
   },
 
   async onShow() {
+    syncTheme(this)
+    this.setData({ themeId: getThemeId() })
     await getAppInstance().waitBoot()
     if (!(await ensureCloudReady())) return
     await this.refresh()
@@ -97,6 +62,7 @@ Page({
   },
 
   async refresh() {
+    this.setData({ loading: true, loadError: '' })
     try {
       const { places: rawPlaces, cities } = await listMapPlaces()
       const places = rawPlaces.map(toPlaceVO)
@@ -105,8 +71,6 @@ Page({
           empty: true,
           places: [],
           cities: [],
-          markers: [],
-          includePoints: [],
           placeCount: 0,
           memoryCount: 0,
           cityCount: 0,
@@ -118,20 +82,10 @@ Page({
 
       const selectedPlace = places[0]
       const memoryCount = places.reduce((sum, place) => sum + place.momentCount, 0)
-      const includePoints = places.map(place => ({
-        latitude: place.latitude,
-        longitude: place.longitude,
-      }))
-
       this.setData({
         empty: false,
         places,
         cities,
-        markers: markersFor(places, selectedPlace.id),
-        includePoints,
-        centerLat: selectedPlace.latitude,
-        centerLng: selectedPlace.longitude,
-        scale: places.length === 1 ? 14 : 8,
         placeCount: places.length,
         memoryCount,
         cityCount: cities.length,
@@ -141,6 +95,9 @@ Page({
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
       wx.showToast({ title: msg, icon: 'none' })
+      this.setData({ loadError: msg })
+    } finally {
+      this.setData({ loading: false })
     }
   },
 
@@ -150,9 +107,6 @@ Page({
     this.setData({
       selectedPlaceId: placeId,
       selectedPlace,
-      markers: markersFor(this.data.places, placeId),
-      centerLat: selectedPlace.latitude,
-      centerLng: selectedPlace.longitude,
     })
   },
 
@@ -160,10 +114,15 @@ Page({
     this.selectPlace(String(e.currentTarget.dataset.id || ''))
   },
 
-  onMarkerTap(e: any) {
-    const markerId = Number(e.detail?.markerId)
-    const place = this.data.places[markerId - 1]
-    if (place) this.selectPlace(place.id)
+  onSelectMapPlace(e: WechatMiniprogram.CustomEvent<{ id: string }>) {
+    this.selectPlace(e.detail.id)
+  },
+
+  onOpenPlace() {
+    const place = this.data.selectedPlace
+    if (!place) return
+    openMomentsContext({ locationKey: place.id, label: place.name })
+    wx.switchTab({ url: '/pages/moments/moments' })
   },
 
   onTapStory() {

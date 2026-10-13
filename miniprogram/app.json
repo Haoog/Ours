@@ -6,8 +6,7 @@
     "pages/profile/profile",
     "pages/compose/compose",
     "pages/moment-detail/moment-detail",
-    "pages/bind/bind",
-    "pages/pet/pet"
+    "pages/bind/bind"
   ],
   "window": {
     "backgroundTextStyle": "dark",
@@ -56,15 +55,13 @@
   "requiredPrivateInfos": [
     "chooseLocation"
   ],
-  "usingComponents": {
-    "pet-float": "/components/pet-float/pet-float"
-  },
   "subpackages": [
     {
       "root": "subpages/",
       "pages": [
         "map/map",
-        "anniversaries/anniversaries"
+        "anniversaries/anniversaries",
+        "backup/backup"
       ]
     }
   ],

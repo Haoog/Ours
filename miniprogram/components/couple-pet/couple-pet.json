@@ -1,6 +1,0 @@
-{
-  "component": true,
-  "usingComponents": {
-    "kitty-face": "/components/kitty-face/kitty-face"
-  }
-}

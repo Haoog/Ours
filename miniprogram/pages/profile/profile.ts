@@ -7,15 +7,24 @@ import {
   updateStartDate,
   updateProfile,
   daysBetween,
-  getPet,
 } from '../../services/store'
 import { toDisplayUrl } from '../../utils/media-url'
 import { changeAvatarForSlot } from '../../utils/avatar'
 import { ensureCloudReady } from '../../services/page-boot'
 import { getAppInstance } from '../../app'
+import { getThemeId, getThemeStyle, setTheme, syncTheme, THEME_OPTIONS, ThemeId } from '../../services/theme'
+import { syncSession } from '../../services/session'
+
+function themeLabel(id: ThemeId): string {
+  if (id === 'peach') return '暖杏'
+  if (id === 'mint') return '薄荷'
+  if (id === 'sky') return '天蓝'
+  return '淡紫'
+}
 
 Page({
   data: {
+    themeStyle: getThemeStyle(),
     youName: '你',
     themName: 'TA',
     youAvatarSrc: '',
@@ -25,27 +34,24 @@ Page({
     role: 'A' as 'A' | 'B',
     bound: false,
     partnerWechatId: '',
-    petLabel: '去领养',
+    themeId: getThemeId() as ThemeId,
+    themeLabel: themeLabel(getThemeId() as ThemeId),
+    themes: THEME_OPTIONS,
   },
 
   async onShow() {
+    syncTheme(this)
     await getAppInstance().waitBoot()
     if (!(await ensureCloudReady())) return
     await this.refresh()
   },
 
   async refresh() {
+    await syncSession(true).catch(() => undefined)
     const couple = getCouple()
     if (!couple) return
     const id = getIdentity()
     const { me, partner } = getRelationshipMembers()
-    let petLabel = '去领养'
-    try {
-      const pet = await getPet()
-      if (pet.adopted) petLabel = `${pet.name} · Lv.${pet.level}`
-    } catch {
-      /* ignore */
-    }
     const [youAvatarSrc, themAvatarSrc] = await Promise.all([
       toDisplayUrl(me.avatarUrl),
       toDisplayUrl(partner?.avatarUrl ?? ''),
@@ -60,7 +66,6 @@ Page({
       role: id.role,
       bound: !!couple.memberB,
       partnerWechatId: couple.partnerWechatId ?? '',
-      petLabel,
     })
   },
 
@@ -71,8 +76,10 @@ Page({
     })
   },
 
-  onTapPet() {
-    wx.navigateTo({ url: '/pages/pet/pet' })
+  onSelectTheme(e: WechatMiniprogram.BaseEvent) {
+    const id = e.currentTarget.dataset.theme as ThemeId
+    if (id !== 'lavender' && id !== 'peach' && id !== 'mint' && id !== 'sky') return
+    this.setData({ themeId: id, themeLabel: themeLabel(id), themeStyle: setTheme(id) })
   },
 
   onEditNickname() {
@@ -130,6 +137,10 @@ Page({
 
   onTapMap() {
     wx.navigateTo({ url: '/subpages/map/map' })
+  },
+
+  onTapBackup() {
+    wx.navigateTo({ url: '/subpages/backup/backup' })
   },
 
 })

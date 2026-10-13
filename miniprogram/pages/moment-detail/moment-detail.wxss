@@ -79,7 +79,7 @@
   line-height: 64rpx;
   text-align: center;
   border-radius: 50%;
-  background: var(--c-accent-soft, rgba(139, 126, 200, 0.15));
+  background: var(--c-accent-soft, rgba(var(--c-accent-rgb), 0.15));
   color: var(--c-accent-deep);
   font-size: 28rpx;
 }
@@ -97,7 +97,7 @@
 .gallery__item .widescreen {
   box-shadow: var(--c-shadow);
   position: relative;
-  background: rgba(139, 126, 200, 0.08);
+  background: rgba(var(--c-accent-rgb), 0.08);
 }
 /* 大图渐进加载：先占位，加载完成后淡入 */
 .gallery__item .widescreen > image {
@@ -190,11 +190,13 @@
 }
 
 .actions {
+  flex-wrap: wrap;
   margin-top: 56rpx;
   display: flex;
   justify-content: center;
   gap: 24rpx;
 }
+.interaction-error { color: var(--c-muted); padding: 12rpx 0; font-size: 24rpx; }
 /* 让原生 share 按钮与 .btn-action 视觉一致 */
 .action-btn {
   margin: 0;
@@ -211,7 +213,7 @@
 }
 .dsk-line,
 .dsk-hero {
-  background: linear-gradient(90deg, rgba(139, 126, 200, 0.1) 25%, rgba(139, 126, 200, 0.2) 37%, rgba(139, 126, 200, 0.1) 63%);
+  background: linear-gradient(90deg, rgba(var(--c-accent-rgb), 0.1) 25%, rgba(var(--c-accent-rgb), 0.2) 37%, rgba(var(--c-accent-rgb), 0.1) 63%);
   background-size: 400% 100%;
   animation: dsk-shimmer 1.4s ease infinite;
 }

@@ -4,8 +4,7 @@ import { listAnniversaries, addAnniversary, deleteAnniversary } from '../../serv
 import { ensureCloudReady } from '../../services/page-boot'
 import { getAppInstance } from '../../app'
 import { Anniversary } from '../../services/types'
-
-const ANNIVERSARY_REMINDER_TEMPLATE_ID: string = ''
+import { getThemeStyle, syncTheme } from '../../services/theme'
 
 interface AnnVO {
   id: string
@@ -17,14 +16,19 @@ interface AnnVO {
 
 Page({
   data: {
+    themeStyle: getThemeStyle(),
     list: [] as AnnVO[],
     empty: true,
     showAdd: false,
     titleDraft: '',
     dateDraft: '',
+    submitting: false,
+    loading: true,
+    loadError: '',
   },
 
   async onShow() {
+    syncTheme(this)
     await getAppInstance().waitBoot()
     if (!(await ensureCloudReady())) return
     const d = new Date()
@@ -34,6 +38,7 @@ Page({
   },
 
   async refresh() {
+    this.setData({ loading: true, loadError: '' })
     try {
       const list = await listAnniversaries()
       const items: AnnVO[] = list.map((a: Anniversary) => ({
@@ -48,6 +53,9 @@ Page({
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
       wx.showToast({ title: msg, icon: 'none' })
+      this.setData({ loadError: msg })
+    } finally {
+      this.setData({ loading: false })
     }
   },
 
@@ -64,43 +72,24 @@ Page({
   },
 
   async onSubmitAdd() {
+    if (this.data.submitting) return
     const title = this.data.titleDraft.trim()
     if (!title) {
       wx.showToast({ title: '写个名称', icon: 'none' })
       return
     }
+    this.setData({ submitting: true })
     try {
-      await addAnniversary({ title, date: this.data.dateDraft, yearly: true, remind: true })
+      await addAnniversary({ title, date: this.data.dateDraft, yearly: true, remind: false })
       this.setData({ showAdd: false, titleDraft: '' })
       wx.showToast({ title: '已添加', icon: 'success' })
       await this.refresh()
     } catch (err) {
       const msg = err instanceof Error ? err.message : '添加失败'
       wx.showToast({ title: msg, icon: 'none' })
+    } finally {
+      this.setData({ submitting: false })
     }
-  },
-
-  onRemind() {
-    if (!ANNIVERSARY_REMINDER_TEMPLATE_ID) {
-      wx.showToast({
-        title: '提醒暂未配置模板 ID',
-        icon: 'none',
-        duration: 2800,
-      })
-      return
-    }
-
-    wx.requestSubscribeMessage({
-      tmplIds: [ANNIVERSARY_REMINDER_TEMPLATE_ID],
-      fail: () => {},
-      complete: () => {
-        wx.showToast({
-          title: '提醒需在公众平台配置模板 ID',
-          icon: 'none',
-          duration: 2800,
-        })
-      },
-    })
   },
 
   onDelete(e: WechatMiniprogram.BaseEvent) {

@@ -1,8 +1,5 @@
-<view class="page grain">
+<view class="page grain" style="{{themeStyle}}">
   <view class="poster fade-in card-soft">
-    <view class="poster__cat">
-      <kitty-face size="lg" mood="awake" />
-    </view>
     <text class="poster__tag tag tag--accent">邀请她</text>
     <text class="poster__title serif">{{youName}} &amp; {{themName}}</text>
     <text class="poster__sub">从 {{startDate}} 起，一起使用 Ours</text>
@@ -24,7 +21,6 @@
   </view>
 
   <button open-type="share" class="share-btn" disabled="{{!inviteReady}}">分享给她</button>
-  <text class="note cat-paw">🐾 邀请链接有效期为 7 天，且只能连接一位成员</text>
+  <text class="note">邀请链接有效期为 7 天，且只能连接一位成员</text>
 
-  <pet-float />
 </view>

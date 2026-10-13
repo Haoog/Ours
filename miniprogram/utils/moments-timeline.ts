@@ -98,7 +98,7 @@ function momentToScene(
     hasVoice,
     voiceDuration: m.voices?.[0]?.duration ?? 0,
     role: m.authorRole,
-    author: m.authorRole === myRole ? '我' : '她',
+    author: m.authorRole === myRole ? '我' : 'TA',
     stagger,
     location: m.location?.name ?? '',
     isSystem,
@@ -144,9 +144,10 @@ export function buildTimelineRows(
   skip: number,
   myRole: 'A' | 'B',
   startDate: string,
+  previousMonth = '',
 ): TimelineRow[] {
   const rows: TimelineRow[] = []
-  let lastMonth = ''
+  let lastMonth = previousMonth
 
   list.forEach((m, idx) => {
     const globalIdx = skip + idx
@@ -158,7 +159,7 @@ export function buildTimelineRows(
     const d = new Date(momentDisplayAt(m))
     if (mk !== lastMonth) {
       lastMonth = mk
-      rows.push({ type: 'month', key: `m-${mk}`, label: `${d.getFullYear()} · ${d.getMonth() + 1} 月` })
+      rows.push({ type: 'month', key: `m-${mk}-${skip}`, label: `${d.getFullYear()} · ${d.getMonth() + 1} 月` })
     }
     for (const ms of collectMilestones(m, startDate, postNumber)) {
       rows.push({ type: 'milestone', key: ms.key, title: ms.title, sub: ms.sub })

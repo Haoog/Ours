@@ -13,7 +13,7 @@ export function feedCacheKey(options?: { tag?: string; keyword?: string; locatio
 
 export function prefetchMomentsFeed<T>(key: string, load: () => Promise<T>): void {
   prefetchKey = key
-  prefetchPromise = load()
+  prefetchPromise = load().catch(() => null)
 }
 
 export async function takePrefetchedFeed<T>(key: string): Promise<T | null> {

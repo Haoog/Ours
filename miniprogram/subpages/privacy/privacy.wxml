@@ -1,6 +1,5 @@
-<view class="page grain">
+<view class="page grain" style="{{themeStyle}}">
   <view class="head">
-    <kitty-face size="md" mood="normal" />
     <text class="head__tag tag tag--accent">Ours</text>
     <text class="head__title serif">隐私政策</text>
     <text class="head__updated">更新日期：2026-05-16</text>

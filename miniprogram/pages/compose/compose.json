@@ -4,7 +4,6 @@
   "navigationBarTextStyle": "black",
   "backgroundColor": "#F5F3FA",
   "usingComponents": {
-    "kitty-face": "/components/kitty-face/kitty-face",
     "live-photo": "/components/live-photo/live-photo"
   }
 }

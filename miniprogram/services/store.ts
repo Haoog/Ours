@@ -32,7 +32,6 @@ import {
   MomentCollectionPlace,
   MomentNeighbors,
   MomentsBriefStats,
-  PetView,
 } from './types'
 
 export { todayKey, daysBetween } from './date'
@@ -130,6 +129,10 @@ export async function listMomentsPage(options?: {
   tag?: MomentTag | ''
   mediaFilter?: 'image' | 'voice' | 'live' | ''
   keyword?: string
+  locationName?: string
+  locationKey?: string
+  year?: number
+  month?: number
 }): Promise<MomentsPage> {
   const payload: Record<string, unknown> = {
     coupleId: coupleId(),
@@ -138,6 +141,10 @@ export async function listMomentsPage(options?: {
   }
   if (options?.tag) payload.tag = options.tag
   if (options?.mediaFilter) payload.mediaFilter = options.mediaFilter
+  if (options?.locationName) payload.locationName = options.locationName
+  if (options?.locationKey) payload.locationKey = options.locationKey
+  if (options?.year) payload.year = options.year
+  if (options?.month) payload.month = options.month
   const action = options?.keyword?.trim() ? 'searchMoments' : 'listMoments'
   if (options?.keyword?.trim()) payload.keyword = options.keyword.trim()
   const data = await callOurs<MomentsPage | Moment[]>(action, payload)
@@ -182,20 +189,8 @@ export async function getMomentsBriefStats(): Promise<MomentsBriefStats> {
   return callOurs<MomentsBriefStats>('getMomentsBriefStats', { coupleId: coupleId() })
 }
 
-export async function getPet(): Promise<PetView> {
-  return callOurs<PetView>('getPet', { coupleId: coupleId() })
-}
-
-export async function adoptPet(name: string): Promise<PetView> {
-  return callOurs<PetView>('adoptPet', { coupleId: coupleId(), name })
-}
-
-export async function petInteract(action: 'feed' | 'pet'): Promise<PetView> {
-  return callOurs<PetView>('petInteract', { coupleId: coupleId(), action })
-}
-
-/** 仅开发/体验版：注入演示动态与纪念日（纯文字，无需上传媒体） */
-export async function seedDemoData(reset = true): Promise<{
+/** 仅开发/体验版：追加演示动态与纪念日（纯文字，无需上传媒体） */
+export async function seedDemoData(): Promise<{
   moments: number
   anniversaries?: number
   rants?: number
@@ -210,7 +205,6 @@ export async function seedDemoData(reset = true): Promise<{
   }>('seedDemoData', {
     coupleId: coupleId(),
     envVersion,
-    reset,
   })
 }
 
@@ -314,6 +308,77 @@ function localFileSize(filePath: string): Promise<number> {
       resolve(0)
     }
   })
+}
+
+const VIDEO_MAX_LONG_SIDE = 1280
+const VIDEO_MAX_BITRATE_KBPS = 2500
+const VIDEO_MAX_FPS = 30
+
+function getVideoInfo(filePath: string): Promise<WechatMiniprogram.GetVideoInfoSuccessCallbackResult> {
+  return new Promise((resolve, reject) => {
+    wx.getVideoInfo({
+      src: filePath,
+      success: resolve,
+      fail: reject,
+    })
+  })
+}
+
+/** 发布普通视频前统一压到适合移动端回忆播放的规格；失败时不回退原视频。 */
+async function compressVideoFile(filePath: string): Promise<string> {
+  if (filePath.startsWith('cloud://')) return filePath
+
+  try {
+    const info = await getVideoInfo(filePath)
+    const width = Number(info.width) || 0
+    const height = Number(info.height) || 0
+    const longSide = Math.max(width, height)
+    const resolution = longSide > VIDEO_MAX_LONG_SIDE
+      ? Math.max(0.1, Math.min(1, VIDEO_MAX_LONG_SIDE / longSide))
+      : 1
+    const sourceBitrate = Number(info.bitrate)
+    const bitrate = Number.isFinite(sourceBitrate) && sourceBitrate > 0
+      ? Math.min(sourceBitrate, VIDEO_MAX_BITRATE_KBPS)
+      : VIDEO_MAX_BITRATE_KBPS
+    const sourceFps = Number(info.fps)
+    const fps = Number.isFinite(sourceFps) && sourceFps > 0
+      ? Math.min(sourceFps, VIDEO_MAX_FPS)
+      : VIDEO_MAX_FPS
+
+    return await new Promise<string>((resolve, reject) => {
+      wx.compressVideo({
+        src: filePath,
+        bitrate,
+        fps,
+        resolution,
+        success: res => {
+          if (res?.tempFilePath) resolve(res.tempFilePath)
+          else reject(new Error('视频压缩失败，请重试'))
+        },
+        fail: () => reject(new Error('视频压缩失败，请重试')),
+      })
+    })
+  } catch {
+    throw new Error('视频压缩失败，请重试')
+  }
+}
+
+async function compressMomentVideos(
+  videos: string[],
+  onProgress?: (percent: number, hint: string) => void,
+): Promise<string[]> {
+  const localCount = videos.filter(video => !video.startsWith('cloud://')).length
+  if (!localCount) return videos
+
+  let done = 0
+  return Promise.all(videos.map(async video => {
+    if (video.startsWith('cloud://')) return video
+    onProgress?.(4 + Math.round((done / localCount) * 6), `压缩视频 ${done + 1}/${localCount}`)
+    const compressed = await compressVideoFile(video)
+    done += 1
+    onProgress?.(4 + Math.round((done / localCount) * 6), `压缩视频 ${done}/${localCount}`)
+    return compressed
+  }))
 }
 
 async function uploadLocalFiles(
@@ -458,6 +523,7 @@ export async function addMoment(
     location: MomentLocation | null
     tag?: MomentTag | ''
     momentDate?: string
+    requestId: string
   },
   onProgress?: UploadProgressFn,
 ): Promise<Moment> {
@@ -476,16 +542,36 @@ export async function addMoment(
   resetUploadState()
   trackingUploads = true
   try {
+    const previous = await callOurs<Moment | null>('getPublishedMoment', { coupleId: cid, requestId: input.requestId })
+    if (previous) return previous
+    const localPaths = [
+      ...input.images, ...(input.videos || []), ...(input.videoCover ? [input.videoCover] : []),
+      ...(input.livePhotos || []).flatMap(item => [item.cover, item.video]),
+      ...(input.voices || []).map(item => item.path),
+    ]
+    const videoSources = new Set(input.videos || [])
+    const mediaBytes = (await Promise.all(localPaths.filter(file => !videoSources.has(file)).map(localFileSize))).reduce((sum, size) => sum + size, 0)
     await callOurs('validateMoment', {
       coupleId: cid,
       content: input.content,
       tag: input.tag ?? '',
       momentDate: input.momentDate,
+      mediaItems: localPaths.length,
+      mediaBytes,
     })
 
     let images = input.images
     let videos = input.videos ?? []
     let videoCover = videos.length ? input.videoCover ?? '' : ''
+
+    if (videos.some(video => !video.startsWith('cloud://'))) {
+      videos = await compressMomentVideos(videos, (p, h) => tick(p, h))
+      const compressedBytes = (await Promise.all(videos.map(localFileSize))).reduce((sum, size) => sum + size, 0)
+      await callOurs('validateMoment', {
+        coupleId: cid, momentDate: input.momentDate, mediaItems: localPaths.length, mediaBytes: mediaBytes + compressedBytes,
+      })
+    }
+
     const imageLocals = [
       ...images.filter(p => !p.startsWith('cloud://')),
       ...(videoCover && !videoCover.startsWith('cloud://') ? [videoCover] : []),
@@ -520,7 +606,9 @@ export async function addMoment(
     }
 
     tick(98, '保存记录…')
+    if (uploadAborted) throw new Error('已取消上传')
     const moment = await callOurs<Moment>('addMoment', {
+      requestId: input.requestId,
       coupleId: cid,
       content: input.content,
       images,
@@ -533,6 +621,13 @@ export async function addMoment(
       tag: input.tag ?? '',
       momentDate: input.momentDate,
     })
+    const used = new Set([
+      ...moment.images, ...(moment.videos || []), ...(moment.videoCover ? [moment.videoCover] : []),
+      ...(moment.livePhotos || []).flatMap(item => [item.cover, item.video]),
+      ...(moment.voices || []).map(item => item.fileID),
+    ])
+    const unused = uploadedFileIDs.filter(id => !used.has(id))
+    if (unused.length) await callOurs('cleanupUploadedFiles', { coupleId: cid, fileIDs: unused }).catch(() => undefined)
     tick(100, '完成')
     return moment
   } catch (err) {
@@ -615,6 +710,19 @@ export async function getMomentLikes(momentId: string): Promise<MomentLikes> {
 
 export async function toggleMomentLike(momentId: string): Promise<MomentLikes> {
   return callOurs<MomentLikes>('toggleMomentLike', { coupleId: coupleId(), momentId })
+}
+
+export async function setMomentLike(momentId: string, liked: boolean): Promise<MomentLikes> {
+  return callOurs<MomentLikes>('setMomentLike', { coupleId: coupleId(), momentId, liked })
+}
+
+export async function updateMoment(momentId: string, input: {
+  content: string
+  momentDate: string
+  tag: MomentTag
+  location: MomentLocation | null
+}): Promise<Moment> {
+  return callOurs<Moment>('updateMoment', { coupleId: coupleId(), momentId, ...input })
 }
 
 function mapLocationKey(location: MomentLocation | null | undefined): string {

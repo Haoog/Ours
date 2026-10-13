@@ -1,0 +1,17 @@
+<view class="page" style="{{themeStyle}}">
+  <text class="title">备份回忆</text>
+  <text class="intro">文字、日期、地点和互动记录，以及照片、视频和语音原文件。</text>
+  <view class="btn-action {{working ? 'is-disabled' : ''}}" bindtap="onStart">{{info ? '重新生成备份' : '生成备份'}}</view>
+  <text wx:if="{{hint}}" class="hint">{{hint}}</text>
+  <text wx:if="{{error}}" class="error">{{error}}</text>
+  <view wx:if="{{info}}" class="summary">{{info.moments}} 条回忆 · {{info.files}} 个媒体文件 · {{info.parts}} 个备份包</view>
+  <view class="package" wx:for="{{packages}}" wx:key="part">
+    <view class="package-copy">
+      <text>{{item.name}}</text>
+      <text wx:if="{{item.missing > 0}}" class="error">{{item.missing}} 个文件未能导出，详情见包内清单</text>
+    </view>
+    <view class="save" data-index="{{index}}" bindtap="onSave">保存</view>
+  </view>
+  <view wx:if="{{info && packages.length < info.parts}}" class="btn-action btn-action--ghost {{working ? 'is-disabled' : ''}}" bindtap="onContinue">{{working ? '生成中…' : '下载下一包'}}</view>
+  <text wx:if="{{info && packages.length === info.parts}}" class="hint">备份包已下载到本机</text>
+</view>

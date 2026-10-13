@@ -12,6 +12,10 @@ Component({
     playSrc: '',
   },
 
+  pageLifetimes: {
+    hide() { this.setData({ playing: false, playSrc: '' }) },
+  },
+
   methods: {
     async onTap() {
       if (this.data.playing) {

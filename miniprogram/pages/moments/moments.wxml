@@ -1,7 +1,6 @@
-<view class="page grain reel-page">
+<view class="page grain reel-page" style="{{themeStyle}}">
   <view class="reel-hero fade-in">
     <view class="reel-hero__top">
-      <kitty-face size="sm" mood="normal" />
       <text class="reel-hero__tag tag tag--accent">我们的回忆</text>
     </view>
     <text class="reel-hero__title serif">回忆</text>
@@ -27,6 +26,14 @@
     <text wx:if="{{searchActive}}" class="search-bar__clear" bindtap="onClearSearch">清除</text>
   </view>
 
+  <view class="context-filter" wx:if="{{viewMode === 'timeline' && contextLabel}}">
+    <text>{{contextLabel}}</text>
+    <view bindtap="onClearContext">清除 ×</view>
+  </view>
+  <view wx:if="{{viewMode !== 'timeline' && secondaryError}}" class="err-banner" bindtap="onRetrySecondary">
+    <text>{{secondaryError}}</text>
+    <text class="err-banner__retry">重试</text>
+  </view>
   <scroll-view class="filters" scroll-x enhanced show-scrollbar="{{false}}" wx:if="{{viewMode === 'timeline'}}">
     <view
       class="seg-sticker seg-sticker--chip {{filterTag === item.key ? 'is-on' : ''}}"
@@ -160,7 +167,8 @@
               </scroll-view>
 
               <view class="scene__verse" wx:elif="{{item.scene.layout === 'verse'}}">
-                <text class="scene__verse-text">{{item.scene.content || '（这一格只有沉默）'}}</text>
+                <text class="scene__verse-text {{item.scene.content.length > 180 && !expandedTexts[item.scene.id] ? 'text-collapsed' : ''}}">{{item.scene.content || '（这一格只有沉默）'}}</text>
+                <text wx:if="{{item.scene.content.length > 180}}" class="text-expand" data-id="{{item.scene.id}}" catchtap="onExpandText">{{expandedTexts[item.scene.id] ? '收起' : '展开'}}</text>
                 <view class="scene__verse-badges" wx:if="{{item.scene.hasVideo || item.scene.hasLive || item.scene.hasVoice}}">
                   <text wx:if="{{item.scene.hasLive}}">实况</text>
                   <text wx:if="{{item.scene.hasVideo}}">视频</text>
@@ -171,7 +179,8 @@
               <view
                 class="scene__caption"
                 wx:if="{{item.scene.content && item.scene.layout !== 'verse' && item.scene.layout !== 'signal'}}">
-                <text class="scene__caption-text">{{item.scene.content}}</text>
+                <text class="scene__caption-text {{item.scene.content.length > 180 && !expandedTexts[item.scene.id] ? 'text-collapsed' : ''}}">{{item.scene.content}}</text>
+                <text wx:if="{{item.scene.content.length > 180}}" class="text-expand" data-id="{{item.scene.id}}" catchtap="onExpandText">{{expandedTexts[item.scene.id] ? '收起' : '展开'}}</text>
               </view>
 
               <view class="scene__meta">
@@ -199,7 +208,7 @@
       </block>
 
       <view class="load-more" wx:if="{{loadingMore}}">加载中…</view>
-      <view class="load-more" wx:elif="{{!hasMore}}">🐾 · 故事暂时翻到这里 ·</view>
+      <view class="load-more" wx:elif="{{!hasMore}}">故事暂时翻到这里</view>
       <view class="load-more load-more--hint" wx:else>上拉加载更多</view>
     </view>
 
@@ -221,7 +230,6 @@
     </view>
 
     <view wx:else class="empty-stage">
-      <view class="kitty-wrap"><kitty-face size="md" mood="dim" /></view>
       <text class="key">{{searchActive ? '没搜到' : '还没有回忆'}}</text>
       <text wx:if="{{!searchActive}}">写下第一段回忆吧</text>
       <view wx:if="{{!searchActive}}" style="margin-top:40rpx; display:flex; justify-content:center;">
@@ -235,14 +243,14 @@
   </block>
 
   <view class="map-panel" wx:if="{{viewMode === 'map'}}">
-    <view wx:if="{{mapEmpty}}" class="map-empty card-soft">
+    <view wx:if="{{secondaryLoading && mapEmpty}}" class="load-more">加载足迹…</view>
+    <view wx:elif="{{mapEmpty && !secondaryError}}" class="map-empty card-soft">
       <view class="map-empty__seal">✦</view>
-      <view class="map-empty__cat"><kitty-face size="md" mood="dim" /></view>
       <text class="map-empty__title serif">故事还没走到地图上</text>
       <text class="map-empty__sub">在写回忆时选一个地点，<br />这里就会亮起你们的第一站。</text>
     </view>
 
-    <block wx:else>
+    <block wx:elif="{{!mapEmpty}}">
       <view class="map-panel__intro">
         <view class="map-panel__kicker"><text>✦</text><text>我们的足迹</text></view>
         <text class="map-panel__title serif">我们的足迹</text>
@@ -258,16 +266,7 @@
       </view>
 
       <view class="map-panel__map-wrap card-soft">
-        <map
-          class="map-panel__map"
-          latitude="{{centerLat}}"
-          longitude="{{centerLng}}"
-          scale="{{mapScale}}"
-          markers="{{markers}}"
-          show-location="{{false}}"
-          enable-zoom
-          enable-scroll
-          bindmarkertap="onMapMarkerTap" />
+        <footprint-map places="{{places}}" selected-id="{{selectedMapPlaceId}}" theme-id="{{themeId}}" bindselect="onSelectMapPlace" />
         <view class="map-panel__stamp"><text>♥</text><text>一起走过</text></view>
         <view class="map-panel__hint">点一点地图上的足迹</view>
       </view>
@@ -315,6 +314,7 @@
         </view>
       </view>
 
+      <view class="place-all" bindtap="onOpenMapPlace">查看这一站的全部回忆 →</view>
       <view class="map-cities" wx:if="{{cities.length}}">
         <view class="map-cities__head"><text class="map-cities__title">城市小记</text><text>你们的故事正在变多</text></view>
         <scroll-view class="map-cities__list" scroll-x enhanced show-scrollbar="{{false}}">
@@ -325,6 +325,7 @@
   </view>
 
   <view class="collections-panel" wx:if="{{viewMode === 'collections'}}">
+    <view wx:if="{{secondaryLoading}}" class="load-more">加载合辑…</view>
     <view class="collections-hero card-soft">
       <view class="collections-hero__copy">
         <text class="collections-hero__eyebrow">整理你们的故事</text>
@@ -403,6 +404,9 @@
   </view>
 
   <view class="recap-panel" wx:if="{{viewMode === 'recap'}}">
+    <picker mode="selector" range="{{recapYears}}" bindchange="onPickRecapYear">
+      <view class="recap-year">{{recapYear}} 年 ▾</view>
+    </picker>
     <view class="recap-cover card-soft">
       <view class="recap-cover__copy">
         <text class="recap-cover__eyebrow">这一月的回忆</text>
@@ -449,12 +453,12 @@
           <text class="recap-metric__label">条回忆</text>
         </view>
         <view class="recap-metric">
-          <text class="recap-metric__value">{{recapStats.countA}}</text>
+          <text class="recap-metric__value">{{myRole === 'A' ? recapStats.countA : recapStats.countB}}</text>
           <text class="recap-metric__label">我写下</text>
         </view>
         <view class="recap-metric">
-          <text class="recap-metric__value">{{recapStats.countB}}</text>
-          <text class="recap-metric__label">她写下</text>
+          <text class="recap-metric__value">{{myRole === 'A' ? recapStats.countB : recapStats.countA}}</text>
+          <text class="recap-metric__label">TA 写下</text>
         </view>
         <view class="recap-metric">
           <text class="recap-metric__value">{{recapStats.placeCount}}</text>
@@ -467,8 +471,8 @@
           <view class="recap-share__bar-b" style="width: {{recapStats.percentB}}%;"></view>
         </view>
         <view class="recap-share__legend">
-          <text><text class="recap-share__dot recap-share__dot--a"></text>我 {{recapStats.countA}}</text>
-          <text><text class="recap-share__dot recap-share__dot--b"></text>她 {{recapStats.countB}}</text>
+          <text><text class="recap-share__dot recap-share__dot--a"></text>{{myRole === 'A' ? '我' : 'TA'}} {{recapStats.countA}}</text>
+          <text><text class="recap-share__dot recap-share__dot--b"></text>{{myRole === 'B' ? '我' : 'TA'}} {{recapStats.countB}}</text>
         </view>
       </view>
       <view class="recap-tone" wx:if="{{recapStats.topTag !== '—'}}">
@@ -483,9 +487,16 @@
       <view class="recap-empty__action" hover-class="u-press" bindtap="onTapCompose">记一条 →</view>
     </view>
     <view wx:else class="recap-empty card-soft">
-      <text class="recap-empty__title">正在翻看这一页…</text>
+      <text class="recap-empty__title">{{recapLoading ? '正在翻看这一页…' : '暂时没有加载成功'}}</text>
     </view>
+    <view class="recap-photo-grid" wx:if="{{recapMemories.length}}">
+      <view wx:for="{{recapMemories}}" wx:key="id" data-id="{{item.id}}" bindtap="onTapScene">
+        <image wx:if="{{item.coverUrl}}" src="{{item.coverUrl}}" mode="aspectFill" lazy-load />
+        <view wx:else class="recap-photo-placeholder">{{item.content || '一段回忆'}}</view>
+        <text>{{item.md}}</text>
+      </view>
+    </view>
+    <view class="place-all" wx:if="{{recapStats && recapStats.total > 0}}" bindtap="onOpenRecap">查看当月全部回忆 →</view>
   </view>
 
-  <pet-float />
 </view>

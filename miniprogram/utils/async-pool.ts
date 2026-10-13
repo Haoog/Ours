@@ -7,14 +7,20 @@ export async function asyncPool<T, R>(
   const limit = Math.max(1, Math.min(concurrency, items.length))
   const results: R[] = new Array(items.length)
   let next = 0
+  let failure: unknown
   const runner = async () => {
     while (true) {
+      if (failure) return
       const i = next++
       if (i >= items.length) break
-      results[i] = await worker(items[i], i)
+      try { results[i] = await worker(items[i], i) } catch (error) {
+        failure = error
+        return
+      }
     }
   }
   await Promise.all(Array.from({ length: limit }, () => runner()))
+  if (failure) throw failure
   return results
 }
 

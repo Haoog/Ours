@@ -1,0 +1,3 @@
+<map class="map" latitude="{{latitude}}" longitude="{{longitude}}" scale="{{scale}}"
+  markers="{{markers}}" include-points="{{points}}" show-location="{{false}}"
+  enable-zoom enable-scroll bindmarkertap="onMarkerTap" />

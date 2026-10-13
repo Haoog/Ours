@@ -35,6 +35,15 @@ function loadPersisted(): Session | null {
 }
 
 let cached: Session | null = loadPersisted()
+let refreshedAt = 0
+let refreshPromise: Promise<Session> | null = null
+
+export function syncSession(force = false): Promise<Session> {
+  if (refreshPromise) return refreshPromise
+  if (!force && cached && Date.now() - refreshedAt < 15000) return Promise.resolve(cached)
+  refreshPromise = bootstrapSession().finally(() => { refreshPromise = null })
+  return refreshPromise
+}
 
 export function getSession(): Session | null {
   return cached
@@ -90,6 +99,7 @@ export async function bootstrapSession(opts?: {
     }
   }
   persist(cached)
+  refreshedAt = Date.now()
   return cached
 }
 
@@ -102,7 +112,7 @@ export async function redeemAccessCodeAndCache(input: {
   const couple = await callOurs<Couple>('redeemAccessCode', input)
   cached = {
     status: 'ready',
-    openid: cached?.openid ?? '',
+    openid: cached?.openid || couple.memberA.openid,
     role: 'A',
     couple,
     coupleId: couple.id,

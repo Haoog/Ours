@@ -1,13 +1,7 @@
-<view class="page grain">
+<view class="page grain" style="{{themeStyle}}">
   <view class="head">
-    <kitty-face size="md" mood="normal" />
     <text class="head__title serif">纪念日</text>
     <text class="head__sub">每年重复 · 首页显示最近一个倒计时</text>
-  </view>
-
-  <view class="row card-soft" bindtap="onRemind">
-    <text class="row__label">订阅提醒</text>
-    <text class="row__val">配置模板后开启 →</text>
   </view>
 
   <view class="list" wx:if="{{!empty}}">
@@ -21,6 +15,8 @@
     </view>
   </view>
 
+  <view wx:elif="{{loading}}" class="empty-stage">加载纪念日…</view>
+  <view wx:elif="{{loadError}}" class="empty-stage" bindtap="refresh">{{loadError}} · 重试</view>
   <view wx:else class="empty-stage">
     <text class="key">还没有纪念日</text>
     <text>添加在一起、生日等特殊日子</text>
@@ -31,12 +27,11 @@
     <picker mode="date" value="{{dateDraft}}" bindchange="onPickDate">
       <view class="add-panel__picker">日期：{{dateDraft}}</view>
     </picker>
-    <view class="btn-action" bindtap="onSubmitAdd">保存</view>
+    <view class="btn-action {{submitting ? 'is-disabled' : ''}}" bindtap="onSubmitAdd">{{submitting ? '保存中…' : '保存'}}</view>
   </view>
 
   <view class="footer">
     <view class="btn-action btn-action--ghost" bindtap="onToggleAdd">{{showAdd ? '收起' : '添加纪念日'}}</view>
   </view>
 
-  <pet-float />
 </view>

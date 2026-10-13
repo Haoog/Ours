@@ -1,13 +1,8 @@
-<view class="page grain">
+<view class="page grain" style="{{themeStyle}}">
   <view class="head fade-in">
-    <view class="head__row">
-      <view class="head__copy">
-        <text class="head__tag tag tag--accent">我们的空间</text>
-        <text class="head__title serif">我们</text>
-      </view>
-      <view class="head__cat">
-        <kitty-face size="md" mood="awake" />
-      </view>
+    <view class="head__copy">
+      <text class="head__tag tag tag--accent">我们的空间</text>
+      <text class="head__title serif">我们</text>
     </view>
     <text class="head__intro">把两个人的日常，放在一个舒服的角落里</text>
   </view>
@@ -27,13 +22,13 @@
     <view class="hero__people">
       <view class="hero__person hero__person--you">
         <view
-          class="hero__avatar-wrap {{role === 'A' ? 'is-editable' : ''}}"
+          class="hero__avatar-wrap is-editable"
           catchtap="onTapAvatar"
-          data-slot="A"
+          data-slot="{{role}}"
         >
           <image wx:if="{{youAvatarSrc}}" class="hero__avatar" src="{{youAvatarSrc}}" mode="aspectFill" lazy-load="true"></image>
           <text wx:else class="hero__badge">我</text>
-          <text wx:if="{{role === 'A'}}" class="hero__edit">换</text>
+          <text class="hero__edit">换</text>
         </view>
         <text class="hero__name">{{youName}}</text>
         <text class="hero__role">我</text>
@@ -47,13 +42,12 @@
 
       <view class="hero__person hero__person--them">
         <view
-          class="hero__avatar-wrap {{role === 'B' ? 'is-editable' : ''}}"
+          class="hero__avatar-wrap"
           catchtap="onTapAvatar"
-          data-slot="B"
+          data-slot="{{role === 'A' ? 'B' : 'A'}}"
         >
           <image wx:if="{{themAvatarSrc}}" class="hero__avatar" src="{{themAvatarSrc}}" mode="aspectFill" lazy-load="true"></image>
           <text wx:else class="hero__badge">她</text>
-          <text wx:if="{{role === 'B'}}" class="hero__edit">换</text>
         </view>
         <text class="hero__name">{{themName}}</text>
         <text class="hero__role">TA</text>
@@ -109,16 +103,6 @@
       </view>
     </view>
 
-    <view class="quick-card-row">
-      <view class="quick-card quick-card--pet card-soft" bindtap="onTapPet">
-        <view class="quick-card__top">
-          <text class="quick-card__icon">猫</text>
-          <text class="quick-card__arrow">↗</text>
-        </view>
-        <text class="quick-card__title">我们的小猫</text>
-        <text class="quick-card__hint">{{petLabel}}</text>
-      </view>
-    </view>
   </view>
 
   <view class="section-head">
@@ -126,6 +110,13 @@
     <text class="section-head__hint">只保留真正有用的</text>
   </view>
   <view class="settings card-soft">
+    <view class="settings-row" bindtap="onTapBackup">
+      <view class="settings-copy">
+        <text class="settings-title">备份回忆</text>
+        <text class="settings-hint">保存记录和媒体到本机</text>
+      </view>
+      <text class="settings-value">→</text>
+    </view>
     <view class="settings-row" bindtap="onEditNickname">
       <view class="settings-copy">
         <text class="settings-title">我的昵称</text>
@@ -153,7 +144,32 @@
     </picker>
   </view>
 
+  <view class="theme-setting card-soft">
+    <view class="theme-setting__head">
+      <view class="settings-copy">
+        <text class="settings-title">主页色系</text>
+        <text class="settings-hint">换一个你们喜欢的颜色，马上生效</text>
+      </view>
+      <text class="settings-value accent">{{themeLabel}}</text>
+    </view>
+    <view class="theme-options">
+      <view
+        wx:for="{{themes}}"
+        wx:key="id"
+        class="theme-option theme-option--{{item.id}} {{themeId === item.id ? 'is-on' : ''}}"
+        data-theme="{{item.id}}"
+        bindtap="onSelectTheme"
+      >
+        <view class="theme-option__swatch"></view>
+        <view class="theme-option__copy">
+          <text class="theme-option__label">{{item.label}}</text>
+          <text class="theme-option__hint">{{item.hint}}</text>
+        </view>
+        <text class="theme-option__check" wx:if="{{themeId === item.id}}">✓</text>
+      </view>
+    </view>
+  </view>
+
   <text class="profile-foot">头像可以直接在上方更换，其他设置保持简单就好</text>
 
-  <pet-float />
 </view>

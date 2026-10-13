@@ -1,4 +1,4 @@
-<view class="page grain" wx:if="{{found && item}}">
+<view class="page grain" style="{{themeStyle}}" wx:if="{{found && item}}">
   <view class="nav-bar" wx:if="{{navTotal > 1}}">
     <view class="nav-bar__btn {{prevId ? '' : 'is-disabled'}}" bindtap="onTapPrev">‹ 上一条</view>
     <text class="nav-bar__pos">{{navIndex}} / {{navTotal}}</text>
@@ -9,6 +9,7 @@
     <text class="head__who role-{{item.role === 'A' ? 'you' : 'them'}}">{{item.author}} 记的</text>
     <text wx:if="{{item.tagLabel}}" class="head__tag chip">{{item.tagLabel}}</text>
   </view>
+  <view wx:if="{{mediaError}}" class="interaction-error" bindtap="onRetry">{{mediaError}}</view>
 
   <view wx:if="{{item.livePhotos.length > 0}}" class="live-gallery">
     <view class="live-gallery__item" wx:for="{{item.livePhotos}}" wx:key="video">
@@ -53,6 +54,7 @@
   </view>
 
   <view class="interact card-soft" wx:if="{{canInteract}}">
+    <view wx:if="{{interactionError}}" class="interaction-error" bindtap="onRetry">{{interactionError}}</view>
     <view class="interact__row">
       <view class="like-btn {{liked ? 'is-on' : ''}}" hover-class="u-press" bindtap="onToggleLike">
         <text>{{liked ? '♥' : '♡'}} {{likeCount}}</text>
@@ -74,11 +76,11 @@
   </view>
 
   <view class="actions" wx:if="{{!item.isSystem}}">
+    <view wx:if="{{canEdit}}" class="btn-action btn-action--ghost" hover-class="u-press" bindtap="onTapEdit">编辑</view>
     <button class="btn-action btn-action--ghost action-btn" hover-class="u-press" open-type="share">分享给 TA</button>
     <view class="btn-action btn-action--ghost" hover-class="u-press" bindtap="onTapDelete">删除这条</view>
   </view>
 </view>
-
 <view wx:elif="{{loading}}" class="page grain detail-skeleton">
   <view class="dsk-line dsk-line--head"></view>
   <view class="dsk-hero"></view>
@@ -86,9 +88,12 @@
   <view class="dsk-line dsk-line--short"></view>
 </view>
 
+<view class="empty-stage" wx:elif="{{loadError}}" bindtap="onRetry">
+  <text class="key">暂时没能加载</text>
+  <text>{{loadError}}</text>
+  <view class="btn-action btn-action--ghost">重试</view>
+</view>
 <view class="empty-stage" wx:else>
   <text class="key">找不到这条了</text>
   <text>可能已经被删掉啦</text>
 </view>
-
-<pet-float />

@@ -36,6 +36,9 @@
 | `moments` | `coupleId`↑ + `tag`↑ + `sortAt`↓ | 标签筛选分页 |
 | `moments` | `coupleId`↑ + `kind`↑ | `getMomentsBriefStats` 计数、系统卡判定 |
 | `moments` | `coupleId`↑ + `authorRole`↑ | A/B 发布数计数 |
+| `moments` | `coupleId`↑ + `kind`↑ + `momentDate`↓ + `createdAt`↓ + `_id`↓ | 当前回忆列表、月份筛选与相邻导航 |
+| `moments` | `coupleId`↑ + `kind`↑ + `tag`↑ + `momentDate`↓ + `createdAt`↓ + `_id`↓ | 标签筛选 |
+| `moments` | `coupleId`↑ + `kind`↑ + `location.name`↑ + `momentDate`↓ + `createdAt`↓ + `_id`↓ | 地点合辑筛选 |
 | `checkins` | `coupleId`↑ + `date`↑ | 当日签到、月历区间查询 |
 | `checkins` | `coupleId`↑ + `date`↑ + `openid`↑ | 判断本人当日是否已签 |
 | `moment_comments` | `coupleId`↑ + `momentId`↑ + `createdAt`↑ | 评论列表、批量计数（`momentId in [...]`） |
@@ -55,6 +58,12 @@
 1. 微信开发者工具 → 右键 `cloudfunctions/ours` → **上传并部署：云端安装依赖**
 2. 首次需在该目录执行 `npm install`（工具可自动安装）
 3. 右键 `cloudfunctions/admin-api` → **上传并部署：云端安装依赖**。这个函数只接受已登录且存在于 `admins` 集合的网页账号；若管理台需要统计历史媒体文件大小，建议将该函数的执行超时设为至少 15 秒。
+
+2026-10-13 更新：先部署 `ours` 与 `admin-api`，再发布新版小程序。`ours` 使用 Node.js 18 或以上，建议 512 MB 内存、120 秒超时，以支持媒体备份分卷。部署时需云端安装新增的 `archiver` 依赖。
+
+新版列表按回忆日期、完整发布时间和文档 ID 排序。旧记录缺少回忆日期时会在首次查询中补齐；请建立上表的新索引。地点坐标筛选同时使用 `location.latitude` / `location.longitude` 范围条件，应根据云控制台提示补充对应复合索引。
+
+`npm run verify:core` 检查发布去重、媒体保护、删除补偿、编辑权限、点赞重试、完整草稿和 ZIP 原文件导出。它使用本地模拟数据库，不访问线上数据。
 
 ## 3. 网页管理台
 
@@ -104,8 +113,12 @@ npm run dev
 - `listMoments` 返回 `{ items, total, hasMore }`，默认每页 20 条（上限 50）；列表项含 `coverUrl` `commentCount` `likeCount` `likedByMe`（批量换链与聚合）
 - 回忆增强 action：`searchMoments` `getOnThisDay` `getMomentsStats` `listMomentCollections` `getMomentNeighbors` `getMomentsBriefStats`
 - 发布可靠性 action：`validateMoment`（上传前校验文字/日期）`cleanupUploadedFiles`（发布失败清理本次上传）`resolveMediaUrls`（客户端换链失败时云端兜底）
-- 养小猫（数据存在 `couples.pet`）：`getPet` `adoptPet` `petInteract`；记动态/签到自动加成长值
+- 2026-10-13 已移除宠物养成、浮窗及成长奖励，旧 `couples.pet` 字段保留但不再读写；重新部署 `ours` 后生效。
 - `listCheckins` 按 `year` + `month` 查询当月签到
 - `deleteMoment` / `cleanupUploadedFiles` 会尝试删除关联的云存储 `fileID`
-- `seedDemoData`：仅开发版/体验版，写入 v0.1+v0.2 全套演示（见产品文档 §16、§17）
+- `seedDemoData`：仅开发版/体验版，追加 v0.1+v0.2 全套演示，不会清理已有动态或媒体（见产品文档 §16、§17）
+- 发布使用固定 `requestId`；`getPublishedMoment` 可确认结果，重试不会重复扣除额度。
+- `updateMoment` 支持作者修改文字、日期、标签和地点；`setMomentLike` 写入目标点赞状态，网络重试不会再次翻转。
+- 删除先提交记录及额度变更，再清理媒体；失败任务留在 `couples.mediaCleanup`，后续启动或删除时重试。上传失败的候选文件延迟一小时检查引用后清理。
+- 「我们 → 备份回忆」使用 `startBackup` / `exportBackupPart` 导出记录及原媒体 ZIP，每包最多 10 个媒体。包内 `backup-status.json` 列出未导出的文件；中间云备份文件一天后进入清理队列，本机已下载的包不受影响。
 - v0.2 action：`listAnniversaries` `addAnniversary` `deleteAnniversary` `getNextAnniversary` `listRants` `addRant` `deleteRant` `listNotes` `sendNote` `markNoteRead` `listComments` `addComment` `deleteComment` `getMomentLikes` `toggleMomentLike` `listMapPlaces`

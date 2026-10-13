@@ -1,4 +1,4 @@
-<view class="page grain footprint-page">
+<view class="page grain footprint-page" style="{{themeStyle}}">
   <view class="footprint-head fade-in">
     <view class="footprint-head__kicker">
       <text class="footprint-head__spark">✦</text>
@@ -26,17 +26,7 @@
   </view>
 
   <view wx:if="{{!empty}}" class="map-card card-soft">
-    <map
-      class="map-card__map"
-      latitude="{{centerLat}}"
-      longitude="{{centerLng}}"
-      scale="{{scale}}"
-      markers="{{markers}}"
-      include-points="{{includePoints}}"
-      show-location="{{false}}"
-      enable-zoom
-      enable-scroll
-      bindmarkertap="onMarkerTap" />
+    <footprint-map places="{{places}}" selected-id="{{selectedPlaceId}}" theme-id="{{themeId}}" bindselect="onSelectMapPlace" />
     <view class="map-card__stamp">
       <text class="map-card__stamp-mark">♥</text>
       <text>一起走过</text>
@@ -44,6 +34,7 @@
     <view class="map-card__hint">点一点地图上的足迹</view>
   </view>
 
+  <view wx:if="{{!empty}}" class="footprint-all" bindtap="onOpenPlace">查看这一站的全部回忆 →</view>
   <view wx:if="{{!empty}}" class="places-section">
     <view class="places-section__head">
       <view>
@@ -109,13 +100,13 @@
     </scroll-view>
   </view>
 
-  <view wx:if="{{empty}}" class="footprint-empty card-soft">
+  <view wx:if="{{loading && empty}}" class="footprint-empty">加载足迹…</view>
+  <view wx:elif="{{loadError}}" class="footprint-empty" bindtap="refresh">{{loadError}} · 重试</view>
+  <view wx:elif="{{empty}}" class="footprint-empty card-soft">
     <view class="footprint-empty__seal">✦</view>
-    <view class="footprint-empty__cat"><kitty-face size="md" mood="dim" /></view>
     <text class="footprint-empty__title serif">故事还没走到地图上</text>
     <text class="footprint-empty__sub">在写回忆时选一个地点，<br />这里就会亮起你们的第一站。</text>
     <view class="footprint-empty__action" hover-class="u-press" bindtap="onTapCompose">记下第一站 →</view>
   </view>
 
-  <pet-float />
 </view>

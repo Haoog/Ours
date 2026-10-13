@@ -3,9 +3,11 @@
 import { getCouple, getRelationshipMembers, createPartnerInvite } from '../../services/store'
 import { ensureCloudReady } from '../../services/page-boot'
 import { getAppInstance } from '../../app'
+import { getThemeStyle, syncTheme } from '../../services/theme'
 
 Page({
   data: {
+    themeStyle: getThemeStyle(),
     youName: '你',
     themName: 'TA',
     startDate: '',
@@ -15,6 +17,7 @@ Page({
   },
 
   async onLoad() {
+    syncTheme(this)
     await getAppInstance().waitBoot()
     if (!(await ensureCloudReady())) return
     const c = getCouple()

@@ -7,12 +7,6 @@
 .head {
   margin-bottom: 24rpx;
 }
-.head__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
-}
 .head__copy {
   display: flex;
   flex-direction: column;
@@ -28,10 +22,6 @@
   line-height: 1.15;
   font-weight: 600;
 }
-.head__cat {
-  display: flex;
-  padding-right: 8rpx;
-}
 .head__intro {
   display: block;
   margin-top: 12rpx;
@@ -44,7 +34,7 @@
   position: relative;
   overflow: hidden;
   padding: 28rpx;
-  background: linear-gradient(145deg, #FFFFFF 0%, #FCFAFF 55%, #F0ECFA 100%);
+  background: linear-gradient(145deg, var(--c-surface) 0%, var(--c-surface) 55%, var(--c-surface-soft) 100%);
 }
 .couple-hero::before {
   content: "";
@@ -54,7 +44,7 @@
   top: -198rpx;
   right: -80rpx;
   border-radius: 50%;
-  background: rgba(155, 142, 207, 0.15);
+  background: var(--c-accent-soft);
 }
 .couple-hero::after {
   content: "";
@@ -117,7 +107,7 @@
 }
 .hero__status.is-pending {
   color: var(--c-accent-deep);
-  background: rgba(139, 126, 200, 0.11);
+  background: var(--c-accent-soft);
 }
 .hero__status-dot {
   width: 10rpx;
@@ -151,7 +141,7 @@
   padding: 4rpx;
   border-radius: 50%;
   background: var(--c-surface);
-  box-shadow: 0 8rpx 20rpx rgba(110, 98, 168, 0.12);
+  box-shadow: var(--c-shadow);
 }
 .hero__person--you .hero__avatar-wrap {
   border: 3rpx solid var(--c-you);
@@ -195,7 +185,7 @@
   border-radius: 50%;
   color: #FFFFFF;
   background: var(--c-accent);
-  box-shadow: 0 4rpx 12rpx rgba(110, 98, 168, 0.35);
+  box-shadow: 0 4rpx 12rpx var(--c-accent-shadow);
   font-size: 18rpx;
   font-weight: 600;
   line-height: 32rpx;
@@ -288,7 +278,7 @@
   padding: 17rpx 18rpx;
   border-radius: 16rpx;
   color: var(--c-accent-deep);
-  background: rgba(139, 126, 200, 0.1);
+  background: var(--c-accent-soft);
 }
 .hero__invite:active {
   opacity: 0.78;
@@ -370,9 +360,6 @@
 .quick-card--map {
   background: linear-gradient(145deg, #FFFFFF, #F0F7F7);
 }
-.quick-card--pet {
-  background: linear-gradient(145deg, #FFFFFF, #FBF3E7);
-}
 .quick-card__top {
   position: relative;
   z-index: 1;
@@ -394,7 +381,6 @@
 }
 .quick-card--anniversary .quick-card__icon { color: #9C735B; background: #F2E8DE; }
 .quick-card--map .quick-card__icon { color: #587F87; background: #E4EDF0; }
-.quick-card--pet .quick-card__icon { color: #92704C; background: #F0E7D9; }
 .quick-card__arrow {
   position: relative;
   z-index: 1;
@@ -472,6 +458,80 @@
 .settings-value.accent {
   color: var(--c-accent-deep);
   font-weight: 500;
+}
+.theme-setting {
+  margin-top: 18rpx;
+  padding: 24rpx 26rpx 26rpx;
+}
+.theme-setting__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  padding-bottom: 20rpx;
+  border-bottom: 1rpx solid var(--c-divider);
+}
+.theme-options {
+  display: flex;
+  gap: 12rpx;
+  padding-top: 20rpx;
+}
+.theme-option {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  padding: 12rpx 10rpx 14rpx;
+  border: 2rpx solid transparent;
+  border-radius: 18rpx;
+  background: var(--c-surface-soft);
+  box-sizing: border-box;
+}
+.theme-option.is-on {
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+.theme-option__swatch {
+  width: 100%;
+  height: 48rpx;
+  border-radius: 12rpx;
+  margin-bottom: 10rpx;
+}
+.theme-option--lavender .theme-option__swatch {
+  background: linear-gradient(135deg, #9B8ECF, #6E62A8);
+}
+.theme-option--peach .theme-option__swatch {
+  background: linear-gradient(135deg, #E7A184, #B76552);
+}
+.theme-option--mint .theme-option__swatch {
+  background: linear-gradient(135deg, #8FC2A9, #568C76);
+}
+.theme-option--sky .theme-option__swatch {
+  background: linear-gradient(135deg, #8CC9E8, #4D91C5);
+}
+.theme-option__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2rpx;
+}
+.theme-option__label {
+  color: var(--c-text);
+  font-size: 24rpx;
+  font-weight: 600;
+}
+.theme-option__hint {
+  overflow: hidden;
+  color: var(--c-muted);
+  font-size: 18rpx;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.theme-option__check {
+  position: absolute;
+  top: 8rpx;
+  right: 10rpx;
+  color: #fff;
+  font-size: 20rpx;
+  font-weight: 700;
 }
 .profile-foot {
   display: block;

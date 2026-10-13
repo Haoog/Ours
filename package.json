@@ -4,6 +4,7 @@
   "private": true,
   "description": "OursWXAPP - 两个人的私密朋友圈（开发期 TS 校验配置）",
   "scripts": {
+    "verify:core": "node scripts/verify-core.cjs",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p miniprogram/tsconfig.json",
     "admin:dev": "npm --prefix admin-web run dev",
     "admin:build": "npm --prefix admin-web run build"

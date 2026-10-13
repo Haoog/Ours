@@ -1,21 +1,28 @@
 /* =========================================================
-   Ours · 淡紫照片日记 + 小猫
-   紫色主调 · 克制不幼 · 小猫点缀
+   Ours · 两个人的照片日记
+   照片、日期与双人头像为视觉重点
    ========================================================= */
 
 page {
+  --c-accent-rgb: 139, 126, 200;
+  --c-deep-rgb: 110, 98, 168;
+  --c-text-rgb: 74, 68, 88;
   --c-bg:           #F5F3FA;
   --c-surface:      #FFFFFF;
   --c-surface-soft: #EDE9F6;
   --c-accent:       #8B7EC8;
+  --c-accent-light: #9B8ECF;
   --c-accent-deep:  #6E62A8;
-  --c-accent-soft:  rgba(139, 126, 200, 0.22);
+  --c-accent-soft:  rgba(var(--c-accent-rgb), 0.22);
   --c-you:          #7B8CB5;
   --c-them:         #9B8ECF;
   --c-text:         #4A4458;
-  --c-muted:        rgba(74, 68, 88, 0.52);
-  --c-divider:      rgba(110, 98, 168, 0.12);
-  --c-shadow:       0 12rpx 36rpx rgba(110, 98, 168, 0.12);
+  --c-muted:        rgba(var(--c-text-rgb), 0.52);
+  --c-divider:      rgba(var(--c-deep-rgb), 0.12);
+  --c-shadow:       0 12rpx 36rpx rgba(var(--c-deep-rgb), 0.12);
+  --c-accent-gradient: linear-gradient(160deg, #9B8ECF 0%, #6E62A8 100%);
+  --c-accent-shadow: rgba(var(--c-deep-rgb), 0.35);
+  --c-grain-dot:     rgba(var(--c-accent-rgb), 0.07);
 
   --c-cinema-black: var(--c-bg);
   --c-film-grey:    var(--c-surface);
@@ -52,7 +59,7 @@ page {
   pointer-events: none;
   opacity: 0.35;
   background-image:
-    radial-gradient(rgba(139, 126, 200, 0.07) 1.5rpx, transparent 1.5rpx);
+    radial-gradient(var(--c-grain-dot) 1.5rpx, transparent 1.5rpx);
   background-size: 24rpx 24rpx;
 }
 
@@ -118,16 +125,10 @@ page {
   position: absolute;
   left: 0; right: 0; bottom: 0;
   padding: 32rpx 28rpx 24rpx;
-  background: linear-gradient(to top, rgba(74, 68, 88, 0.62), transparent);
+  background: linear-gradient(to top, rgba(var(--c-text-rgb), 0.62), transparent);
   color: #fff;
   font-size: var(--fs-body);
   border-radius: 0 0 var(--r-card) var(--r-card);
-}
-
-.cat-paw {
-  font-size: 22rpx;
-  color: var(--c-accent-soft);
-  letter-spacing: 0.2em;
 }
 
 .action-ring {
@@ -135,7 +136,7 @@ page {
   height: 108rpx;
   border-radius: 50%;
   border: none;
-  background: linear-gradient(160deg, #9B8ECF 0%, #6E62A8 100%);
+  background: var(--c-accent-gradient);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -143,7 +144,7 @@ page {
   font-size: 48rpx;
   font-weight: 300;
   line-height: 1;
-  box-shadow: 0 14rpx 40rpx rgba(110, 98, 168, 0.35);
+  box-shadow: 0 14rpx 40rpx var(--c-accent-shadow);
 }
 .action-ring:active {
   transform: scale(0.96);
@@ -155,7 +156,7 @@ page {
   height: 108rpx;
   border-radius: 34rpx 38rpx 30rpx 36rpx;
   transform: rotate(2.5deg);
-  background: linear-gradient(160deg, #9b8ecf 0%, #6e62a8 100%);
+  background: var(--c-accent-gradient);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -163,7 +164,7 @@ page {
   font-size: 48rpx;
   font-weight: 300;
   line-height: 1;
-  box-shadow: 0 14rpx 40rpx rgba(110, 98, 168, 0.35);
+  box-shadow: 0 14rpx 40rpx var(--c-accent-shadow);
 }
 .fab-sticker:active {
   transform: scale(0.96) rotate(0deg);
@@ -177,11 +178,6 @@ page {
   animation: ours-fade-in 480ms ease both;
 }
 
-@keyframes ours-cat-awake {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-6rpx); }
-}
-
 .btn-action {
   display: inline-flex;
   align-items: center;
@@ -189,11 +185,11 @@ page {
   height: 88rpx;
   padding: 0 48rpx;
   border-radius: var(--r-pill);
-  background: linear-gradient(160deg, #9B8ECF, #6E62A8);
+  background: var(--c-accent-gradient);
   color: #fff;
   font-size: 28rpx;
   font-weight: 500;
-  box-shadow: 0 8rpx 24rpx rgba(110, 98, 168, 0.28);
+  box-shadow: 0 8rpx 24rpx var(--c-accent-shadow);
 }
 .btn-action--ghost {
   background: var(--c-surface);
@@ -211,49 +207,6 @@ page {
 .u-press {
   opacity: 0.86;
   transform: scale(0.97);
-}
-
-/* 小猫互动：手帐贴纸（浮窗 / 宠物页），勿与 btn-action 混用 */
-.pet-sticker {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 88rpx;
-  padding: 0 40rpx;
-  font-size: 28rpx;
-  font-weight: 600;
-  line-height: 1.25;
-  box-shadow: 0 6rpx 0 rgba(110, 98, 168, 0.08);
-}
-.pet-sticker:active {
-  transform: scale(0.96) rotate(0deg) !important;
-}
-.pet-sticker--feed {
-  border-radius: 28rpx 36rpx 22rpx 32rpx;
-  transform: rotate(-2deg);
-  background: linear-gradient(148deg, #FAF0E4 0%, #EDDCC8 100%);
-  color: #7A5E42;
-  border: 1rpx solid rgba(196, 154, 108, 0.32);
-}
-.pet-sticker--pet {
-  border-radius: 36rpx 24rpx 32rpx 28rpx;
-  transform: rotate(1.5deg);
-  background: linear-gradient(148deg, #F4EEFC 0%, #E6DCF6 100%);
-  color: var(--c-accent-deep);
-  border: 1rpx solid var(--c-accent-soft);
-  font-weight: 500;
-}
-.pet-sticker--adopt {
-  border-radius: 32rpx 28rpx 40rpx 30rpx;
-  transform: rotate(-1deg);
-  background: linear-gradient(160deg, #9b8ecf, #6e62a8);
-  color: #fff;
-  box-shadow: 0 8rpx 24rpx rgba(110, 98, 168, 0.28);
-}
-.pet-sticker.is-off {
-  opacity: 0.42;
-  pointer-events: none;
-  box-shadow: none;
 }
 
 /* 二级 Tab / 筛选：书签分段（回忆视图等） */
@@ -306,11 +259,11 @@ page {
   padding: 0 40rpx;
   border-radius: 26rpx 34rpx 22rpx 30rpx;
   transform: rotate(-1deg);
-  background: linear-gradient(160deg, #9b8ecf, #6e62a8);
+  background: var(--c-accent-gradient);
   color: #fff;
   font-size: 28rpx;
   font-weight: 600;
-  box-shadow: 0 8rpx 22rpx rgba(110, 98, 168, 0.26);
+  box-shadow: 0 8rpx 22rpx var(--c-accent-shadow);
 }
 .sticker-send:active {
   transform: scale(0.96) rotate(0deg);
@@ -367,7 +320,7 @@ page {
   right: 0;
   width: 4rpx;
   border-radius: 4rpx;
-  background: linear-gradient(180deg, #9B8ECF, #6E62A8);
+  background: var(--c-accent-gradient);
 }
 
 .empty-stage {
@@ -381,12 +334,6 @@ page {
   display: block;
   margin-bottom: 20rpx;
 }
-.empty-stage .kitty-wrap {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 28rpx;
-}
-
 .card-soft {
   background: var(--c-surface);
   border-radius: var(--r-card);

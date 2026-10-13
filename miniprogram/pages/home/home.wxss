@@ -6,21 +6,17 @@
 }
 
 .hero {
-  padding: 40rpx var(--space-edge) 8rpx;
+  padding: 24rpx var(--space-edge) 8rpx;
   text-align: center;
-}
-.hero__cat {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 12rpx;
 }
 .hero__brand {
   font-size: 24rpx;
 }
 .hero__day {
-  margin-top: 28rpx;
+  margin-top: 16rpx;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  justify-content: center;
   align-items: center;
   gap: 6rpx;
 }
@@ -29,7 +25,7 @@
   color: var(--c-muted);
 }
 .hero__day-num {
-  font-size: var(--fs-hero);
+  font-size: 76rpx;
   line-height: 1;
   color: var(--c-accent-deep);
   font-weight: 700;
@@ -44,20 +40,21 @@
   font-size: 26rpx;
   color: var(--c-muted);
 }
-.hero__paw {
+.hero__since {
   display: block;
   margin-top: 12rpx;
-  font-size: 20rpx;
+  font-size: 22rpx;
+  color: var(--c-muted);
 }
 
 .memory-prompt {
   display: flex;
   align-items: center;
   gap: 16rpx;
-  margin: 30rpx var(--space-edge) 0;
+  margin: 22rpx var(--space-edge) 0;
   padding: 22rpx 24rpx;
   border-color: var(--c-accent-soft);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(237, 233, 246, 0.82));
+  background: linear-gradient(135deg, var(--c-surface), var(--c-surface-soft));
 }
 .memory-prompt__icon {
   display: flex;
@@ -120,7 +117,7 @@
 }
 
 .recent {
-  margin-top: 48rpx;
+  margin-top: 30rpx;
   padding: 0 var(--space-edge);
 }
 .recent__heading {
@@ -296,9 +293,15 @@
 
 .fab {
   position: fixed;
-  right: 36rpx;
-  bottom: calc(48rpx + env(safe-area-inset-bottom));
   z-index: 10;
+  width: 108rpx;
+  height: 108rpx;
+  touch-action: none;
+  user-select: none;
+}
+.fab--dragging .fab-sticker {
+  transform: scale(1.06) rotate(0deg);
+  box-shadow: 0 18rpx 44rpx var(--c-accent-shadow);
 }
 
 /* 最近记录加载骨架 */
@@ -326,7 +329,7 @@
 }
 .rsk-thumb,
 .rsk-line {
-  background: linear-gradient(90deg, rgba(139, 126, 200, 0.1) 25%, rgba(139, 126, 200, 0.2) 37%, rgba(139, 126, 200, 0.1) 63%);
+  background: linear-gradient(90deg, var(--c-accent-soft) 25%, var(--c-accent) 37%, var(--c-accent-soft) 63%);
   background-size: 400% 100%;
   animation: rsk-shimmer 1.4s ease infinite;
 }

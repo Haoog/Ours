@@ -1,0 +1,10 @@
+.page { min-height: 100vh; box-sizing: border-box; padding: 32rpx 36rpx 80rpx; background: var(--c-bg); color: var(--c-text); }
+.title { display: block; font-size: 40rpx; font-weight: 600; }
+.intro { display: block; margin: 12rpx 0 28rpx; color: var(--c-muted); font-size: 26rpx; }
+.summary { padding: 28rpx 0 16rpx; font-size: 26rpx; }
+.hint { display: block; margin: 18rpx 0; color: var(--c-muted); font-size: 24rpx; }
+.error { display: block; margin: 12rpx 0; color: #a44551; font-size: 24rpx; }
+.package { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; padding: 24rpx 0; border-bottom: 1rpx solid var(--c-divider); }
+.package-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 26rpx; }
+.save { flex-shrink: 0; padding: 14rpx; color: var(--c-accent-deep); font-size: 26rpx; }
+.btn-action--ghost { margin-top: 24rpx; }
