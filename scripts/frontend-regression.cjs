@@ -19,17 +19,31 @@ async function main() {
   let names = ['123-Ours-2026-01-01-1.zip', 'draft.mp3', 'unrelated.zip']
   let confirm
   const deleted = []
-  const wxBackup = { env: { USER_DATA_PATH: '/private' }, getFileSystemManager: () => ({ readdirSync: () => names, unlink: ({ filePath, success }) => { deleted.push(filePath); names = names.filter(n => !filePath.endsWith(n)); success() } }), showModal: opts => { confirm = opts.success }, showToast() {} }
-  const backup = page('miniprogram/subpages/backup/backup.ts', { '../../services/theme': theme }, wxBackup)
+  const deleteStorage = new Map()
+  const deleteSession = { status: 'ready', coupleId: 'c', openid: 'user' }
+  const deleteKey = 'OURS_BACKUP_PROGRESS_V1:c:user'
+  const deleteInfo = { snapshotFileID: 'snapshot', parts: 1, createdAt: 123 }
+  const deletePackage = { part: 0, name: 'Ours-2026-01-01-1.zip', path: '/private/123-Ours-2026-01-01-1.zip', missing: 0 }
+  deleteStorage.set(deleteKey, { info: deleteInfo, nextPart: 1, packages: [deletePackage], deletedParts: [] })
+  const wxBackup = { env: { USER_DATA_PATH: '/private' }, getStorageSync: key => deleteStorage.get(key), setStorageSync: (key, value) => deleteStorage.set(key, structuredClone(value)), removeStorageSync: key => deleteStorage.delete(key), getFileSystemManager: () => ({ readdirSync: () => names, unlink: ({ filePath, success }) => { deleted.push(filePath); names = names.filter(n => !filePath.endsWith(n)); success() } }), showModal: opts => { confirm = opts.success }, showToast() {} }
+  const backup = page('miniprogram/subpages/backup/backup.ts', { '../../services/theme': theme, '../../services/session': { requireSession: () => deleteSession, coupleId: () => deleteSession.coupleId } }, wxBackup)
+  backup.restoreProgress()
   backup.refreshLocalPackages()
   assert.equal(backup.data.localPackages.length, 1)
   backup.onDeleteLocal(event(0)); confirm({ confirm: false }); assert.equal(deleted.length, 0)
   backup.onDeleteLocal(event(0)); confirm({ confirm: true }); assert.deepEqual(deleted, ['/private/123-Ours-2026-01-01-1.zip'])
+  assert.deepEqual(deleteStorage.get(deleteKey).deletedParts, [0]); assert.equal(deleteStorage.get(deleteKey).packages.length, 0)
   assert(names.includes('draft.mp3') && names.includes('unrelated.zip'))
 
   const files = new Map([['draft.mp3', 'draft'], ['99-Ours-2026-01-01-1.zip', 'existing']])
   const filename = path => path.slice('/private/'.length)
-  let cloudMode = 'fail'
+  let cloudMode = 'fail', cloudDownloads = 0
+  const storage = new Map()
+  const session = { coupleId: 'c', openid: 'user' }
+  const createdAt = Date.now()
+  const progressKey = 'OURS_BACKUP_PROGRESS_V1:c:user'
+  const info = { snapshotFileID: 'snapshot', parts: 1, createdAt }
+  storage.set(progressKey, { info, nextPart: 0, packages: [] })
   const disk = {
     readdirSync: () => [...files.keys()],
     unlinkSync: path => { if (!files.delete(filename(path))) throw new Error('missing') },
@@ -37,25 +51,28 @@ async function main() {
     rename: ({ oldPath, newPath, success }) => { files.set(filename(newPath), files.get(filename(oldPath))); files.delete(filename(oldPath)); success() },
   }
   const downloading = page('miniprogram/subpages/backup/backup.ts', {
-    '../../services/theme': theme, '../../services/session': { coupleId: () => 'c' },
+    '../../services/theme': theme, '../../services/session': { coupleId: () => 'c', requireSession: () => session },
     '../../services/cloud-api': { callOurs: async () => ({ fileID: 'cloud://backup', url: 'https://backup', name: 'Ours-2026-01-01-1.zip', missing: 0 }) },
   }, {
     env: { USER_DATA_PATH: '/private' }, getFileSystemManager: () => disk,
+    getStorageSync: key => storage.get(key), setStorageSync: (key, value) => storage.set(key, value),
     downloadFile: ({ filePath, success }) => { files.set(filename(filePath), 'partial HTTP'); success({ statusCode: 500 }) },
-    cloud: { downloadFile: async () => { if (cloudMode === 'fail') throw new Error('cloud offline'); return { tempFilePath: '/cloud' } } },
+    cloud: { downloadFile: async () => { cloudDownloads++; if (cloudMode === 'fail') throw new Error('cloud offline'); return { tempFilePath: '/cloud' } } },
   })
-  downloading.data.info = { snapshotFileID: 'snapshot', parts: 1, createdAt: 123 }
+  downloading.restoreProgress()
   await downloading.onContinue(); downloading.refreshLocalPackages()
-  assert.equal(downloading.data.error, 'cloud offline'); assert.equal(downloading.data.nextPart, 0)
+  assert.equal(downloading.data.error, 'cloud offline'); assert.equal(downloading.data.nextPart, 0); assert.equal(cloudDownloads, 1)
   assert.deepEqual([...files.keys()].sort(), ['99-Ours-2026-01-01-1.zip', 'draft.mp3'])
   assert.equal(downloading.data.localPackages.length, 1)
   cloudMode = 'copy-fail'; await downloading.onContinue()
   assert.equal(downloading.data.error, 'copy failed'); assert.deepEqual([...files.keys()].sort(), ['99-Ours-2026-01-01-1.zip', 'draft.mp3'])
   cloudMode = 'success'; await downloading.onContinue()
   assert.equal(downloading.data.error, ''); assert.equal(downloading.data.nextPart, 1)
-  assert.equal(files.get('123-Ours-2026-01-01-1.zip'), 'complete'); assert.equal(files.get('draft.mp3'), 'draft')
-  downloading.data.nextPart = 0; await downloading.onContinue()
-  assert.equal(files.get('123-Ours-2026-01-01-1.zip'), 'complete'); assert.match(downloading.data.error, /已存在/)
+  const savedName = `${createdAt}-Ours-2026-01-01-1.zip`
+  assert.equal(files.get(savedName), 'complete'); assert.equal(files.get('draft.mp3'), 'draft')
+  storage.set(progressKey, { info, nextPart: 0, packages: [] })
+  await downloading.onContinue()
+  assert.equal(files.get(savedName), 'complete'); assert.match(downloading.data.error, /已存在/)
 
   let rejectInvite, calls = 0
   const bind = page('miniprogram/pages/bind/bind.ts', { '../../services/theme': theme, '../../services/page-boot': { ensureCloudReady: async () => true }, '../../services/store': { getCouple: () => ({ id: 'c', startDate: '2020-01-01' }), getRelationshipMembers: () => ({ me: {}, partner: null }), createPartnerInvite: () => { calls++; return calls === 1 ? new Promise((_, reject) => { rejectInvite = reject }) : Promise.resolve({ token: 'retry-token' }) } } }, {})

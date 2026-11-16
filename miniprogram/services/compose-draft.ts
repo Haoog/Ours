@@ -55,6 +55,9 @@ async function keepFile(filePath: string, requestId: string): Promise<string> {
 }
 
 export async function saveComposeDraft(snapshot: ComposeDraft, editId = ''): Promise<void> {
+  const session = requireSession()
+  const identity = { coupleId: session.coupleId, role: session.role, openid: session.openid }
+  const key = draftKey(editId)
   const persist = (file: string) => keepFile(file, snapshot.requestId)
   const draft: ComposeDraft = {
     ...snapshot,
@@ -66,7 +69,11 @@ export async function saveComposeDraft(snapshot: ComposeDraft, editId = ''): Pro
     }))),
     voice: snapshot.voice ? { ...snapshot.voice, path: await persist(snapshot.voice.path) } : null,
   }
-  wx.setStorageSync(draftKey(editId), draft)
+  const current = requireSession()
+  if (current.coupleId !== identity.coupleId || current.role !== identity.role || current.openid !== identity.openid) {
+    throw new Error('空间或账号已切换，草稿未保存')
+  }
+  wx.setStorageSync(key, draft)
 }
 
 export function readComposeDraft(editId = ''): ComposeDraft | null {

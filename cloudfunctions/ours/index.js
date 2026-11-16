@@ -1646,8 +1646,10 @@ async function startBackup(openid, payload = {}) {
     const ext = fileID.match(/\.[a-zA-Z0-9]+$/)?.[0] || '.bin'
     return { fileID, path: `media/${String(index + 1).padStart(5, '0')}${ext}` }
   })
+  const { planFiles } = require('./backup')
+  const groups = await planFiles(cloud, files)
   const snapshot = {
-    version: 1, id, coupleId, parts: Math.max(1, Math.ceil(files.length / 10)), files,
+    version: 2, id, coupleId, parts: groups.length, files: groups.flat(), groups,
     records: {
       exportedAt: Date.now(),
       space: { startDate: couple.startDate, memberA: couple.memberA, memberB: couple.memberB },
@@ -1688,7 +1690,7 @@ async function exportBackupPart(openid, payload = {}) {
   const part = integerOr(payload.part, -1, -1)
   if (part < 0 || part >= snapshot.parts) throw new Error('备份分卷无效')
   const { zipBackupPart } = require('./backup')
-  const result = await zipBackupPart(cloud, snapshot, part, snapshot.files.slice(part * 10, (part + 1) * 10))
+  const result = await zipBackupPart(cloud, snapshot, part, snapshot.version === 1 ? snapshot.files.slice(part * 10, (part + 1) * 10) : snapshot.groups?.[part] || (() => { throw new Error('备份分卷无效') })())
   let urls
   try {
     await db.collection('couples').doc(coupleId).update({ data: {

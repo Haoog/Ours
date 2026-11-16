@@ -81,6 +81,7 @@ Page({
     filterTag: '' as MomentTag | '',
     tagFilters: MOMENT_TAG_FILTERS,
     searchKeyword: '',
+    submittedKeyword: '',
     searchActive: false,
     locationName: '',
     locationKey: '',
@@ -123,6 +124,8 @@ Page({
   mapLoaded: false,
   feedRevision: 0,
   recapRevision: 0,
+  secondaryRevision: 0,
+  loadedQueryKey: '',
   rawMoments: [] as Moment[],
   lastRefreshedAt: 0,
   likePending: new Set<string>(),
@@ -149,7 +152,7 @@ Page({
     const context = takeMomentsContext()
     if (context) this.setData({
       viewMode: 'timeline', locationKey: context.locationKey, locationName: '',
-      contextLabel: context.label, dateYear: 0, dateMonth: 0, filterTag: '', searchActive: false, searchKeyword: '',
+      contextLabel: context.label, dateYear: 0, dateMonth: 0, filterTag: '', searchActive: false, searchKeyword: '', submittedKeyword: '',
     })
     if (stale) this.invalidateSecondaryViews()
     const startYear = Number(getCouple()?.startDate.slice(0, 4)) || new Date().getFullYear()
@@ -166,6 +169,7 @@ Page({
   },
 
   invalidateSecondaryViews() {
+    this.secondaryRevision++
     this.mapLoaded = false
     this.collectionsLoaded = false
     this.recapCache = {}
@@ -193,7 +197,8 @@ Page({
   onSwitchView(e: WechatMiniprogram.BaseEvent) {
     const mode = (e.currentTarget.dataset.mode ?? 'timeline') as ViewMode
     if (mode === this.data.viewMode) return
-    this.setData({ viewMode: mode, secondaryError: '' })
+    this.secondaryRevision++
+    this.setData({ viewMode: mode, secondaryError: '', secondaryLoading: false, recapLoading: false })
     if (mode === 'map') {
       if (!this.mapLoaded) this.loadMap()
     } else if (mode === 'collections') {
@@ -207,7 +212,7 @@ Page({
 
   onPickFilter(e: WechatMiniprogram.BaseEvent) {
     const filterTag = (e.currentTarget.dataset.key ?? '') as MomentTag | ''
-    this.setData({ filterTag, searchActive: false, searchKeyword: '' })
+    this.setData({ filterTag, searchActive: false, searchKeyword: '', submittedKeyword: '' })
     this.refresh()
   },
 
@@ -217,12 +222,12 @@ Page({
 
   onSearchConfirm() {
     const kw = this.data.searchKeyword.trim()
-    this.setData({ searchActive: Boolean(kw) })
+    this.setData({ searchActive: Boolean(kw), submittedKeyword: kw })
     this.refresh()
   },
 
   onClearSearch() {
-    this.setData({ searchKeyword: '', searchActive: false })
+    this.setData({ searchKeyword: '', submittedKeyword: '', searchActive: false })
     this.refresh()
   },
 
@@ -234,13 +239,13 @@ Page({
 
   onTapCollectionTag(e: WechatMiniprogram.BaseEvent) {
     const key = e.currentTarget.dataset.key as string
-    this.setData({ filterTag: key as MomentTag, viewMode: 'timeline', searchActive: false, searchKeyword: '', contextLabel: '', locationKey: '', locationName: '', dateYear: 0, dateMonth: 0 })
+    this.setData({ filterTag: key as MomentTag, viewMode: 'timeline', searchActive: false, searchKeyword: '', submittedKeyword: '', contextLabel: '', locationKey: '', locationName: '', dateYear: 0, dateMonth: 0 })
     this.refresh()
   },
 
   onTapCollectionPlace(e: WechatMiniprogram.BaseEvent) {
     const name = e.currentTarget.dataset.name as string
-    this.setData({ viewMode: 'timeline', locationName: name, locationKey: '', contextLabel: name, filterTag: '', searchKeyword: '', searchActive: false, dateYear: 0, dateMonth: 0 })
+    this.setData({ viewMode: 'timeline', locationName: name, locationKey: '', contextLabel: name, filterTag: '', searchKeyword: '', submittedKeyword: '', searchActive: false, dateYear: 0, dateMonth: 0 })
     this.refresh()
   },
 
@@ -264,7 +269,7 @@ Page({
       viewMode: 'timeline', filterTag: '', locationName: '', locationKey: '',
       dateYear: this.data.recapYear, dateMonth: this.data.recapMonth,
       contextLabel: `${this.data.recapYear} 年 ${this.data.recapMonth} 月`,
-      searchActive: false, searchKeyword: '',
+      searchActive: false, searchKeyword: '', submittedKeyword: '',
     })
     void this.refresh()
   },
@@ -277,17 +282,24 @@ Page({
     const revision = ++this.feedRevision
     const options = {
       tag: this.data.filterTag || undefined,
-      keyword: this.data.searchActive ? this.data.searchKeyword : undefined,
+      keyword: this.data.submittedKeyword || undefined,
       locationName: this.data.locationName || undefined, locationKey: this.data.locationKey || undefined,
       year: this.data.dateYear || undefined, month: this.data.dateMonth || undefined,
     }
-    const targetCount = preserve ? Math.max(PAGE_SIZE, this.data.skip) : PAGE_SIZE
-    this.setData({ loading: true, loadingMore: false })
+    const queryKey = JSON.stringify(options)
+    const sameQuery = queryKey === this.loadedQueryKey
+    const targetCount = preserve && sameQuery ? Math.max(PAGE_SIZE, this.data.skip) : PAGE_SIZE
+    if (this.data.viewMode === 'timeline') this.secondaryRevision++
+    if (!sameQuery) {
+      this.rawMoments = []
+      this.setData({ rows: [], onThisDay: [], empty: true, skip: 0, total: 0, hasMore: false })
+    }
+    this.setData({ loading: true, loadingMore: false, loadError: '' })
     try {
       const myRole = getIdentity().role
       const key = feedCacheKey({
         tag: this.data.filterTag || '',
-        keyword: this.data.searchActive ? this.data.searchKeyword : '',
+        keyword: this.data.submittedKeyword,
       })
       const prefetched = options.locationName || options.locationKey || options.year ? null : await takePrefetchedFeed<MomentsPage>(key)
       const page = prefetched ?? await listMomentsPage({ ...options, limit: PAGE_SIZE, skip: 0 })
@@ -299,6 +311,7 @@ Page({
         page.hasMore = more.hasMore
         if (!more.items.length) break
       }
+      this.loadedQueryKey = queryKey
       this.rawMoments = page.items
       const rows = buildTimelineRows(page.items, page.total, 0, myRole, this.coupleStartDate())
       this.setData({
@@ -349,7 +362,7 @@ Page({
         limit: PAGE_SIZE,
         skip: this.data.skip,
         tag: this.data.filterTag || undefined,
-        keyword: this.data.searchActive ? this.data.searchKeyword : undefined,
+        keyword: this.data.submittedKeyword || undefined,
         locationName: this.data.locationName || undefined, locationKey: this.data.locationKey || undefined,
         year: this.data.dateYear || undefined, month: this.data.dateMonth || undefined,
       })
@@ -380,9 +393,11 @@ Page({
   },
 
   async loadMap() {
+    const revision = ++this.secondaryRevision
     this.setData({ secondaryLoading: true, secondaryError: '' })
     try {
       const { places, cities } = await listMapPlaces()
+      if (revision !== this.secondaryRevision || this.data.viewMode !== 'map') return
       this.mapLoaded = true
       if (!places.length) {
         this.setData({
@@ -410,11 +425,12 @@ Page({
         selectedMapPlace,
       })
     } catch (err) {
+      if (revision !== this.secondaryRevision || this.data.viewMode !== 'map') return
       const msg = err instanceof Error ? err.message : '地图加载失败'
       wx.showToast({ title: msg, icon: 'none' })
       this.setData({ secondaryError: msg })
     } finally {
-      this.setData({ secondaryLoading: false })
+      if (revision === this.secondaryRevision) this.setData({ secondaryLoading: false })
     }
   },
 
@@ -445,14 +461,16 @@ Page({
   onOpenMapPlace() {
     const place = this.data.selectedMapPlace
     if (!place) return
-    this.setData({ viewMode: 'timeline', locationKey: place.id, locationName: '', contextLabel: place.name, dateYear: 0, dateMonth: 0, filterTag: '', searchActive: false, searchKeyword: '' })
+    this.setData({ viewMode: 'timeline', locationKey: place.id, locationName: '', contextLabel: place.name, dateYear: 0, dateMonth: 0, filterTag: '', searchActive: false, searchKeyword: '', submittedKeyword: '' })
     void this.refresh()
   },
 
   async loadCollections() {
+    const revision = ++this.secondaryRevision
     this.setData({ secondaryLoading: true, secondaryError: '' })
     try {
       const raw = await listMomentCollections()
+      if (revision !== this.secondaryRevision || this.data.viewMode !== 'collections') return
       const tagMax = Math.max(1, ...raw.tags.map(item => item.count))
       const placeMax = Math.max(1, ...raw.places.map(item => item.count))
       const collections: CollectionsVO = {
@@ -474,16 +492,18 @@ Page({
         collectionPlaceTotal: collections.places.reduce((sum, item) => sum + item.count, 0),
       })
     } catch (err) {
+      if (revision !== this.secondaryRevision || this.data.viewMode !== 'collections') return
       const msg = err instanceof Error ? err.message : '合辑加载失败'
       wx.showToast({ title: msg, icon: 'none' })
       this.setData({ secondaryError: msg })
     } finally {
-      this.setData({ secondaryLoading: false })
+      if (revision === this.secondaryRevision) this.setData({ secondaryLoading: false })
     }
   },
 
   async loadRecap() {
     const revision = ++this.recapRevision
+    const secondaryRevision = ++this.secondaryRevision
     this.setData({ recapLoading: true, secondaryError: '', recapStats: null, recapMemories: [] })
     const key = `${this.data.recapYear}-${this.data.recapMonth}`
     const cached = this.recapCache[key]
@@ -492,7 +512,7 @@ Page({
         cached ? Promise.resolve(cached) : getMomentsStats(this.data.recapYear, this.data.recapMonth),
         listMomentsPage({ limit: 6, year: this.data.recapYear, month: this.data.recapMonth }),
       ])
-      if (revision !== this.recapRevision) return
+      if (revision !== this.recapRevision || secondaryRevision !== this.secondaryRevision || this.data.viewMode !== 'recap') return
       const total = Math.max(0, stats.total)
       const percentA = total > 0 ? Math.min(100, Math.round((stats.countA / total) * 100)) : 0
       const vo = {
@@ -507,11 +527,12 @@ Page({
       this.recapCache[key] = vo
       this.setData({ recapStats: vo, recapMemories: scenesFromMoments(page.items, page.total, 0, getIdentity().role) })
     } catch (err) {
+      if (revision !== this.recapRevision || secondaryRevision !== this.secondaryRevision || this.data.viewMode !== 'recap') return
       const msg = err instanceof Error ? err.message : '回顾加载失败'
       wx.showToast({ title: msg, icon: 'none' })
-      if (revision === this.recapRevision) this.setData({ secondaryError: msg })
+      this.setData({ secondaryError: msg })
     } finally {
-      if (revision === this.recapRevision) this.setData({ recapLoading: false })
+      if (revision === this.recapRevision && secondaryRevision === this.secondaryRevision) this.setData({ recapLoading: false })
     }
   },
 

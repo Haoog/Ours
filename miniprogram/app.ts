@@ -3,6 +3,7 @@
 import { CLOUD_ENV_ID } from './config/env'
 import { bootstrapSession, getSession } from './services/session'
 import { applyThemeChrome } from './services/theme'
+import { retryUploadCleanup } from './services/upload-cleanup'
 
 interface IAppOption {
   globalData: {
@@ -14,6 +15,8 @@ interface IAppOption {
 }
 
 let bootPromise: Promise<void> | null = null
+let sessionVerified = false
+let bootInFlight = false
 
 App<IAppOption>({
   globalData: {
@@ -28,6 +31,11 @@ App<IAppOption>({
     }
     wx.cloud.init({ env: CLOUD_ENV_ID, traceUser: true })
     applyThemeChrome()
+    wx.onNetworkStatusChange?.(status => {
+      if (!status.isConnected) return
+      if (sessionVerified) void retryUploadCleanup()
+      else if (!bootInFlight) bootPromise = this.runBoot()
+    })
 
     const info = wx.getAccountInfoSync?.()
     if (info?.miniProgram?.envVersion) {
@@ -41,6 +49,7 @@ App<IAppOption>({
   },
 
   onShow(options) {
+    if (sessionVerified) void retryUploadCleanup()
     const invite = options?.query?.inviteToken
     if (!this.globalData.booted || !invite || getSession()?.status === 'ready') return
     bootPromise = this.runBoot(String(invite)).then(() => {
@@ -49,9 +58,14 @@ App<IAppOption>({
   },
 
   async runBoot(inviteToken?: string) {
+    if (bootInFlight) return bootPromise ?? Promise.resolve()
+    bootInFlight = true
+    sessionVerified = false
     try {
       const session = await bootstrapSession({ inviteToken })
       this.globalData.booted = true
+      sessionVerified = true
+      if (session.status === 'ready') void retryUploadCleanup()
       if (session.status !== 'ready') {
         const pages = getCurrentPages()
         const route = pages[pages.length - 1]?.route ?? ''
@@ -67,6 +81,8 @@ App<IAppOption>({
         content: `${msg}\n\n请稍后重试；如果仍无法连接，请联系管理员。`,
         showCancel: false,
       })
+    } finally {
+      bootInFlight = false
     }
   },
 

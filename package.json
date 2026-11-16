@@ -6,6 +6,7 @@
   "scripts": {
     "verify:core": "node scripts/verify-core.cjs",
     "verify:frontend": "node scripts/frontend-regression.cjs",
+    "verify:features": "node scripts/verify-video.cjs && node scripts/verify-search.cjs && node scripts/verify-upload-cleanup.cjs && node scripts/verify-backup.cjs && node scripts/verify-backup-server.cjs",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p miniprogram/tsconfig.json",
     "admin:dev": "npm --prefix admin-web run dev",
     "admin:build": "npm --prefix admin-web run build"

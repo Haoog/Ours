@@ -4,6 +4,7 @@ import { resolveCloudUrl } from '../../utils/cloud-url-cache'
 import { addMoment, getMoment, updateMoment, getCouple, getIdentity, listMomentsPage, cancelMomentUpload } from '../../services/store'
 import { clearComposeDraft, newPublishId, readComposeDraft, saveComposeDraft, ComposeDraft } from '../../services/compose-draft'
 import { todayKey } from '../../services/date'
+import { getSession } from '../../services/session'
 import { formatMomentDateLabel } from '../../utils/moment-time'
 import { ensureCloudReady } from '../../services/page-boot'
 import { getAppInstance } from '../../app'
@@ -11,7 +12,7 @@ import { markMomentsListStale } from '../../services/moments-list-state'
 import { feedCacheKey, prefetchMomentsFeed } from '../../services/moments-feed-cache'
 import { MomentLocation, MomentTag } from '../../services/types'
 import { MOMENT_TAG_POST } from '../../utils/tags'
-import { isLikelyLivePhotoFile, isRegularVideoFile } from '../../utils/live-photo'
+import { canUseAsLivePhoto, isRegularVideoFile } from '../../utils/live-photo'
 import { getThemeStyle, syncTheme } from '../../services/theme'
 
 const PICK_BATCH = 20
@@ -120,6 +121,7 @@ Page({
   requestId: '',
   editId: '',
   draftSaveQueue: Promise.resolve() as Promise<void>,
+  draftIdentity: null as { coupleId: string | null; role: string; openid: string } | null,
   editReady: false,
   unloaded: false,
 
@@ -128,6 +130,8 @@ Page({
     await getAppInstance().waitBoot()
     if (!(await ensureCloudReady())) return
     const id = getIdentity()
+    const session = getSession()
+    this.draftIdentity = session && { coupleId: session.coupleId, role: session.role, openid: session.openid }
     const couple = getCouple()
     const sys = wx.getSystemInfoSync()
     const momentDate = todayKey()
@@ -216,10 +220,18 @@ Page({
     if (!this.requestId || this.skipDraftSaveOnUnload || (this.editId && !this.editReady)) return
     const { content, tagSelected, momentDate, location, locationFull, images, video, videoCover, livePhotos, voice } = this.data
     const snapshot: ComposeDraft = { requestId: this.requestId, content, tagSelected, momentDate, location, locationFull, images, video, videoCover, livePhotos, voice, pendingResult: this.data.pendingResult }
-    this.draftSaveQueue = this.draftSaveQueue.catch(() => undefined).then(() =>
-      saveComposeDraft(snapshot, this.editId),
-    ).catch(() => {
-      wx.showToast({ title: '草稿未能保存，请检查本机空间', icon: 'none' })
+    const identity = this.draftIdentity
+    const editId = this.editId
+    this.draftSaveQueue = this.draftSaveQueue.catch(() => undefined).then(() => {
+      const current = getSession()
+      if (!identity || !current || current.status !== 'ready' || current.coupleId !== identity.coupleId || current.role !== identity.role || current.openid !== identity.openid) {
+        throw new Error('空间或账号已切换，草稿未保存')
+      }
+      return saveComposeDraft(snapshot, editId)
+    })
+    // 后台保存也需要处理拒绝，但保留队列的失败状态供发布流程检查。
+    void this.draftSaveQueue.catch(() => {
+      wx.showToast({ title: '草稿未能保存，请检查空间或账号', icon: 'none' })
     })
   },
 
@@ -228,6 +240,9 @@ Page({
       clearTimeout(this.draftTimer as number)
       this.draftTimer = 0
     }
+    const current = getSession()
+    const identity = this.draftIdentity
+    if (!identity || !current || current.status !== 'ready' || current.coupleId !== identity.coupleId || current.role !== identity.role || current.openid !== identity.openid) return
     try {
       clearComposeDraft(this.requestId, this.editId)
     } catch (e) {}
@@ -317,20 +332,9 @@ Page({
 
     let remaining = this.mediaSlots()
     for (const f of files) {
-      const cost = isLikelyLivePhotoFile(f) ? 2 : isRegularVideoFile(f) ? (f.thumbTempFilePath ? 2 : 1) : 1
+      const cost = isRegularVideoFile(f) ? (f.thumbTempFilePath ? 2 : 1) : 1
       if (cost > remaining) {
         wx.showToast({ title: '已达到本条可添加数量', icon: 'none' })
-        continue
-      }
-      if (isLikelyLivePhotoFile(f)) {
-        livePhotos.push({
-          id: this.newLiveId(),
-          cover: f.thumbTempFilePath,
-          video: f.tempFilePath,
-          duration: Math.max(1, Math.round(f.duration || 1)),
-        })
-        addedLive += 1
-        remaining -= cost
         continue
       }
       if (isRegularVideoFile(f)) {
@@ -347,12 +351,8 @@ Page({
     }
 
     if (skippedVideo) {
-      wx.showToast({ title: '长视频每条只能 1 个', icon: 'none' })
+      wx.showToast({ title: '视频每条只能 1 个', icon: 'none' })
     }
-    if (addedLive > 0) {
-      wx.showToast({ title: `已识别 ${addedLive} 条实况`, icon: 'none' })
-    }
-
     this.setData({
       images,
       livePhotos,
@@ -361,7 +361,7 @@ Page({
       canPost: this.syncCanPost({ images, livePhotos, video }),
     })
     this.updateMediaRemaining()
-    this.scheduleDraftSave()
+    this.saveDraft()
   },
 
   mediaSlots() {
@@ -455,52 +455,57 @@ Page({
       wx.showToast({ title: '实况需要两个媒体名额', icon: 'none' })
       return
     }
-    wx.chooseMedia({
-      count: 1,
-      mediaType: ['image', 'video'],
-      sizeType: ['original'],
-      sourceType: ['album'],
-      maxDuration: 10,
-      success: res => {
-        const f = res.tempFiles[0]
-        if (!f) return
-        if (isLikelyLivePhotoFile(f)) {
-          const livePhotos = [
-            ...this.data.livePhotos,
-            {
-              id: this.newLiveId(),
-              cover: f.thumbTempFilePath,
-              video: f.tempFilePath,
-              duration: Math.max(1, Math.round(f.duration || 1)),
-            },
-          ]
-          this.setData({
-            livePhotos,
-            canPost: this.syncCanPost({ livePhotos }),
-          })
-          wx.showToast({ title: '实况已添加', icon: 'success' })
-          this.updateMediaRemaining()
-          this.scheduleDraftSave()
-          return
-        }
-        if (this.data.isIOS) {
-          wx.showModal({
-            title: '没识别到实况',
-            content:
-              '请在相册左上角点「实况」图标后再选；若仍只有静图，可在系统相册对该照片选「储存为视频」，再用「视频」按钮添加。',
-            showCancel: false,
-          })
-        } else {
-          wx.showToast({ title: '请用 iPhone 相册中的实况照片', icon: 'none' })
-        }
+    wx.showModal({
+      title: '添加实况',
+      content: '请选择实况对应的视频，所选视频及其缩略图将作为实况添加。微信可能只返回静态照片；如无法选择视频，请先在系统相册将实况存为视频。',
+      confirmText: '选择视频',
+      success: result => {
+        if (!result.confirm) return
+        wx.chooseMedia({
+          count: 1,
+          mediaType: ['image', 'video'],
+          sizeType: ['original'],
+          sourceType: ['album'],
+          success: res => {
+            const f = res.tempFiles[0]
+            if (!f) return
+            if (!canUseAsLivePhoto(f)) {
+              wx.showModal({
+                title: '无法添加实况',
+                content: '需要视频及其缩略图。请在系统相册将实况存为视频后重试；若仍无法获取缩略图，请使用视频入口添加。',
+                showCancel: false,
+              })
+              return
+            }
+            if (this.mediaSlots() < 2) {
+              wx.showToast({ title: '实况需要两个媒体名额', icon: 'none' })
+              return
+            }
+            const livePhotos = [
+              ...this.data.livePhotos,
+              { id: this.newLiveId(), cover: f.thumbTempFilePath, video: f.tempFilePath, duration: Math.max(1, Math.round(f.duration || 1)) },
+            ]
+            this.setData({ livePhotos, canPost: this.syncCanPost({ livePhotos }) })
+            this.updateMediaRemaining()
+            this.saveDraft()
+            wx.showToast({ title: '实况已添加', icon: 'success' })
+          },
+          fail: err => {
+            if (err.errMsg && err.errMsg.indexOf('cancel') === -1) wx.showToast({ title: '没能选到媒体', icon: 'none' })
+          },
+        })
       },
     })
   },
 
   onPickVideo() {
-    if (this.data.editing || this.mediaSlots() < 2) return
+    if (this.data.editing) return
     if (this.data.video) {
       wx.showToast({ title: '已有一条视频，可先删除再换', icon: 'none' })
+      return
+    }
+    if (this.mediaSlots() < 1) {
+      wx.showToast({ title: '媒体名额已满', icon: 'none' })
       return
     }
     wx.chooseMedia({
@@ -511,21 +516,13 @@ Page({
       success: res => {
         const file = res.tempFiles[0]
         if (!file) return
-        if (isLikelyLivePhotoFile(file)) {
-          const livePhotos = [
-            ...this.data.livePhotos,
-            {
-              id: this.newLiveId(),
-              cover: file.thumbTempFilePath,
-              video: file.tempFilePath,
-              duration: Math.max(1, Math.round(file.duration || 1)),
-            },
-          ]
-          this.setData({
-            livePhotos,
-            canPost: this.syncCanPost({ livePhotos }),
-          })
-          wx.showToast({ title: '已按实况添加', icon: 'none' })
+        if (this.data.video) {
+          wx.showToast({ title: '已有一条视频，可先删除再换', icon: 'none' })
+          return
+        }
+        const needed = file.thumbTempFilePath ? 2 : 1
+        if (this.mediaSlots() < needed) {
+          wx.showToast({ title: needed === 2 ? '视频和封面需要两个媒体名额' : '媒体名额已满', icon: 'none' })
           return
         }
         this.setData({
@@ -534,7 +531,7 @@ Page({
           canPost: this.syncCanPost({ video: file.tempFilePath }),
         })
         this.updateMediaRemaining()
-        this.scheduleDraftSave()
+        this.saveDraft()
       },
       fail: err => {
         if (err.errMsg && err.errMsg.indexOf('cancel') === -1) {
@@ -834,7 +831,7 @@ Page({
       }
       markMomentsListStale()
       this.skipDraftSaveOnUnload = true
-      await this.draftSaveQueue
+      try { await this.draftSaveQueue } catch { /* 发布已成功，后台草稿保存失败不影响结果 */ }
       this.clearDraft()
       // 利用跳转前的 toast 间隙预取首屏，回到回忆 Tab 时秒开（含刚发布的这条）
       prefetchMomentsFeed(feedCacheKey(), () => listMomentsPage({ limit: 20, skip: 0 }))
@@ -849,7 +846,10 @@ Page({
         this.setData({ pendingResult: true })
       }
       wx.showToast({ title: msg, icon: 'none' })
-      this.saveDraft()
+      if (this.data.pendingResult) {
+        this.saveDraft()
+        try { await this.draftSaveQueue } catch { /* 保存失败已提示，保留页面供重试 */ }
+      }
     } finally {
       this.setData({ posting: false, uploadProgress: 0, uploadHint: '' })
     }

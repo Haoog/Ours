@@ -34,6 +34,10 @@
     <text>{{secondaryError}}</text>
     <text class="err-banner__retry">重试</text>
   </view>
+  <view wx:if="{{viewMode === 'timeline' && loadError && rows.length}}" class="err-banner card-soft" bindtap="onRetry">
+    <text>刷新失败：{{loadError}}，当前显示上次加载的内容</text>
+    <text class="err-banner__retry">点此重试</text>
+  </view>
   <scroll-view class="filters" scroll-x enhanced show-scrollbar="{{false}}" wx:if="{{viewMode === 'timeline'}}">
     <view
       class="seg-sticker seg-sticker--chip {{filterTag === item.key ? 'is-on' : ''}}"

@@ -18,4 +18,5 @@ jobs:
       - run: npm run typecheck
       - run: npm run verify:core
       - run: npm run verify:frontend
+      - run: npm run verify:features
       - run: npm run admin:build

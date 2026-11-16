@@ -1,6 +1,7 @@
 // services/store.ts — v0.1 云开发数据层
 
 import { callOurs } from './cloud-api'
+import { holdUpload, releaseUploads, forgetUploadHolds, retryUploadCleanup, fallbackUploadCleanup } from './upload-cleanup'
 import { resolveCloudUrl as resolveCachedCloudUrl } from '../utils/cloud-url-cache'
 import { asyncPool } from '../utils/async-pool'
 import {
@@ -223,6 +224,15 @@ function fileExt(path: string, fallback: string): string {
 const UPLOAD_RETRY = 2
 /** 仅在发布动态流程内跟踪上传任务，供「取消上传」中断 */
 let trackingUploads = false
+let uploadOwner: { openid: string; coupleId: string } | null = null
+
+function ensureUploadOwner(): void {
+  if (!uploadOwner) return
+  const session = getSession()
+  if (!session || session.status !== 'ready' || session.openid !== uploadOwner.openid || session.coupleId !== uploadOwner.coupleId) {
+    throw new Error('空间或账号已变化，请重新发布')
+  }
+}
 let activeUploadTasks: { abort: () => void }[] = []
 let uploadAborted = false
 
@@ -388,7 +398,8 @@ async function uploadLocalFiles(
   defaultExt: string,
   progress?: ProgressCtx,
 ): Promise<string[]> {
-  const cid = coupleId()
+  if (trackingUploads) ensureUploadOwner()
+  const cid = trackingUploads && uploadOwner ? uploadOwner.coupleId : coupleId()
   const locals = localPaths.filter(p => !p.startsWith('cloud://'))
   let localDone = 0
 
@@ -532,16 +543,41 @@ export async function addMoment(
   const hasUpload = countLocalUploads(input) > 0
   if (hasUpload) tick(2, '准备上传…')
 
-  const cid = coupleId()
+  const session = requireSession()
+  const cid = session.coupleId!
+  if (!session.openid) throw new Error('登录状态异常，请重新进入小程序')
+  const owner = { openid: session.openid, coupleId: cid }
   const uploadedFileIDs: string[] = []
   let uploadedMediaBytes = 0
   const trackUploaded = (fileID: string, bytes: number) => {
     uploadedFileIDs.push(fileID)
     uploadedMediaBytes += Math.max(0, Number(bytes) || 0)
+    try {
+      holdUpload(owner, fileID)
+    } catch {
+      throw new Error('本地存储不可用，已停止发布，请检查存储空间后重试')
+    }
+  }
+  const finishUploads = async (published: Set<string>) => {
+    try {
+      releaseUploads(owner, uploadedFileIDs, published)
+      void retryUploadCleanup()
+    } catch {
+      const pending = uploadedFileIDs.filter(id => !published.has(id))
+      const saved = await fallbackUploadCleanup(owner, pending)
+      forgetUploadHolds(owner, uploadedFileIDs)
+      void retryUploadCleanup()
+      if (saved) {
+        wx.showToast({ title: '本地存储不可用', icon: 'none', duration: 3000 })
+      } else {
+        wx.showModal({ title: '清理记录暂未保存', content: '请恢复网络和本地存储，并切回原账号和空间以重试。记录暂时仅保存在本次运行中，退出小程序后可能丢失。', showCancel: false })
+      }
+    }
   }
 
   resetUploadState()
   trackingUploads = true
+  uploadOwner = owner
   try {
     const previous = await callOurs<Moment | null>('getPublishedMoment', { coupleId: cid, requestId: input.requestId })
     if (previous) return previous
@@ -608,6 +644,7 @@ export async function addMoment(
 
     tick(98, '保存记录…')
     if (uploadAborted) throw new Error('已取消上传')
+    ensureUploadOwner()
     const moment = await callOurs<Moment>('addMoment', {
       requestId: input.requestId,
       coupleId: cid,
@@ -627,17 +664,15 @@ export async function addMoment(
       ...(moment.livePhotos || []).flatMap(item => [item.cover, item.video]),
       ...(moment.voices || []).map(item => item.fileID),
     ])
-    const unused = uploadedFileIDs.filter(id => !used.has(id))
-    if (unused.length) await callOurs('cleanupUploadedFiles', { coupleId: cid, fileIDs: unused }).catch(() => undefined)
+    await finishUploads(used)
     tick(100, '完成')
     return moment
   } catch (err) {
-    if (uploadedFileIDs.length > 0) {
-      await callOurs('cleanupUploadedFiles', { coupleId: cid, fileIDs: uploadedFileIDs }).catch(() => undefined)
-    }
+    if (uploadedFileIDs.length > 0) await finishUploads(new Set())
     throw err
   } finally {
     trackingUploads = false
+    uploadOwner = null
     activeUploadTasks = []
     uploadAborted = false
   }

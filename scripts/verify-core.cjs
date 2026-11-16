@@ -169,7 +169,7 @@ async function verifyServer() {
   }
   const context = vm.createContext({
     exports: {}, console, Date, Buffer, process: { env: {} },
-    require: id => id === 'wx-server-sdk' ? sdk : id === 'https' ? fakeHttps : id === './backup' && zipHook ? { zipBackupPart: zipHook } : require(id),
+    require: id => id === 'wx-server-sdk' ? sdk : id === 'https' ? fakeHttps : id === './backup' ? { planFiles: async (_cloud, files) => [files.map(file => ({ ...file, size: 100 }))], zipBackupPart: (...args) => zipHook(...args) } : require(id),
     readRecords: name => Object.values(documents[name] || {}).map(clone),
     onMeasure: async () => { if (measureHook) await measureHook() },
   })
@@ -638,7 +638,8 @@ async function verifyUploadCancellation() {
   const api = loadTS('miniprogram/services/store.ts', {
     './cloud-api': { callOurs: async action => action === 'getPublishedMoment' ? null : {} },
     '../utils/async-pool': pool,
-    './session': { coupleId: () => 'space' },
+    './session': { coupleId: () => 'space', requireSession: () => ({ coupleId: 'space', openid: 'user' }), getSession: () => ({ status: 'ready', coupleId: 'space', openid: 'user' }) },
+    './upload-cleanup': { holdUpload() {}, releaseUploads() {}, forgetUploadHolds() {}, retryUploadCleanup: async () => {}, fallbackUploadCleanup: async () => true },
   }, { wx: { cloud, getFileSystemManager: () => ({ getFileInfo: options => options.success({ size: 10 }) }) } }).exports
   const publish = api.addMoment({ content: 'memory', images: ['local.jpg'], location: null, requestId: 'request_upload' },
     value => { progress = Math.max(progress, value) })
@@ -653,6 +654,82 @@ async function verifyUploadCancellation() {
   const result = await api.uploadMomentImages(['later.jpg'])
   assert.equal(result.length, 1, 'A cancelled publication must not poison later uploads')
   console.log('PASS: actual upload task receives progress, aborts on cancellation, and later uploads work')
+}
+
+async function verifyComposeSubmitDraftRace() {
+  const identity = { status: 'ready', coupleId: 'space', role: 'A', openid: 'user' }
+  async function scenario({ backgroundFailure = false, switchIdentity = false, preflightFailure = false, publishFailure = false, uncertain = false }) {
+    let definition, page, saves = 0, publishes = 0, clears = 0, stale = 0
+    let session = identity
+    const toasts = []
+    const timers = []
+    const wx = { showToast: value => toasts.push(value), switchTab() {}, navigateBack() {} }
+    loadTS('miniprogram/pages/compose/compose.ts', {
+      '../../services/theme': { getThemeStyle: () => '', syncTheme() {} },
+      '../../services/date': { todayKey: () => '2026-01-01' },
+      '../../utils/tags': { MOMENT_TAG_POST: [] },
+      '../../services/session': { getSession: () => session },
+      '../../services/compose-draft': {
+        saveComposeDraft: async () => {
+          saves++
+          if ((preflightFailure && saves === 1) || (backgroundFailure && saves === 2)) throw new Error('draft failed')
+        },
+        clearComposeDraft: () => { clears++ },
+      },
+      '../../services/store': {
+        addMoment: async (payload, progress) => {
+          publishes++
+          if (backgroundFailure) {
+            page.onHide()
+            await page.draftSaveQueue.catch(() => {})
+          }
+          if (switchIdentity) session = { ...identity, openid: 'other' }
+          if (uncertain || (backgroundFailure && !publishFailure)) progress(98, '')
+          if (publishFailure) throw new Error('publish failed')
+        },
+        listMomentsPage: async () => [],
+      },
+      '../../services/moments-list-state': { markMomentsListStale: () => { stale++ } },
+      '../../services/moments-feed-cache': { feedCacheKey: () => 'feed', prefetchMomentsFeed() {} },
+    }, { Page: value => { definition = value }, wx, setTimeout: fn => { timers.push(fn); return 1 } })
+    page = {
+      ...definition,
+      data: { ...definition.data, canPost: true, content: 'memory' },
+      requestId: 'draft123', draftIdentity: identity, draftSaveQueue: Promise.resolve(),
+      setData(patch) { Object.assign(this.data, patch) },
+      stopVoicePreview() {},
+    }
+    await page.onSubmit()
+    return { page, saves, publishes, clears, stale, toasts, timers }
+  }
+
+  for (const switchIdentity of [false, true]) {
+    const result = await scenario({ backgroundFailure: true, switchIdentity })
+    assert.equal(result.saves, 2, 'The preflight and onHide saves must both run')
+    assert.equal(result.publishes, 1)
+    assert.equal(result.clears, switchIdentity ? 0 : 1, 'Only clear a draft for the original identity')
+    assert.equal(result.stale, 1)
+    assert.equal(result.page.data.pendingResult, false)
+    assert(result.toasts.some(toast => toast.title === '已保存' && toast.icon === 'success'))
+    assert(!result.toasts.some(toast => toast.title === 'draft failed'))
+    assert.equal(result.timers.length, 1, 'Confirmed publication navigates away')
+  }
+  const preflight = await scenario({ preflightFailure: true })
+  assert.equal(preflight.publishes, 0, 'A failed preflight draft must block publication')
+  assert.equal(preflight.clears, 0)
+  assert.equal(preflight.page.data.pendingResult, false)
+  assert(preflight.toasts.some(toast => toast.title === 'draft failed'))
+
+  for (const uncertain of [false, true]) {
+    const result = await scenario({ backgroundFailure: true, publishFailure: true, uncertain })
+    assert.equal(result.clears, 0)
+    assert.equal(result.stale, 0)
+    assert.equal(result.page.data.pendingResult, uncertain)
+    assert(result.toasts.some(toast => toast.title === 'publish failed'))
+    assert(!result.toasts.some(toast => toast.title === '已保存'))
+    if (uncertain) assert.equal(result.saves, 3, 'Persist an unconfirmed result for retry')
+  }
+  console.log('PASS: compose publication and background draft failure race, identity and unconfirmed results')
 }
 
 async function verifyRecording() {
@@ -677,6 +754,7 @@ async function verifyRecording() {
     '../../services/theme': { getThemeStyle: () => '', syncTheme() {} },
     '../../services/store': { getIdentity: () => ({ role: 'A' }), getCouple: () => ({ startDate: '2020-01-01' }) },
     '../../services/page-boot': { ensureCloudReady: async () => true },
+    '../../services/session': { getSession: () => ({ status: 'ready', coupleId: 'space', openid: 'user', role: 'A' }) },
     '../../app': { getAppInstance: () => ({ waitBoot: async () => {} }) },
     '../../services/date': { todayKey: () => '2026-01-01' },
     '../../utils/moment-time': { formatMomentDateLabel: () => '今天' },
@@ -834,29 +912,35 @@ async function verifyAdminSafety() {
 }
 
 async function verifyBackup(directory) {
-  const { zipBackupPart } = require(path.join(root, 'cloudfunctions/ours/backup'))
+  const { zipBackupPart, planFiles, PART_BYTES } = require(path.join(root, 'cloudfunctions/ours/backup'))
   const target = path.join(directory, 'backup.zip')
-  const snapshot = {
-    coupleId: 'space', id: 'backup', parts: 1, records: { moments: [{ content: 'memory' }] },
-    files: [{ fileID: 'file-1', path: 'media/photo.jpg' }, { fileID: 'missing', path: 'media/missing.jpg' }],
+  const originalFetch = global.fetch
+  const sizes = { a: 4, b: PART_BYTES, huge: PART_BYTES + 1, missing: 4 }
+  const cloud = {
+    async getTempFileURL({ fileList }) { return { fileList: fileList.map(fileID => ({ fileID, status: 0, tempFileURL: `https://example.invalid/${fileID}` })) } },
+    async uploadFile({ fileContent }) { await require('stream/promises').pipeline(fileContent, fs.createWriteStream(target)); return { fileID: 'backup-file' } },
   }
-  const result = await zipBackupPart({
-    async downloadFile({ fileID }) {
-      if (fileID === 'missing') throw new Error('file unavailable')
-      return { fileContent: Buffer.from([1, 2, 3, 4]) }
-    },
-    async uploadFile({ fileContent }) {
-      const chunks = []
-      for await (const chunk of fileContent) chunks.push(chunk)
-      fs.writeFileSync(target, Buffer.concat(chunks))
-      return { fileID: 'backup-file' }
-    },
-  }, snapshot, 0, snapshot.files)
-  assert.equal(result.missing, 1)
-  assert.equal(JSON.parse(execFileSync('unzip', ['-p', target, 'records.json'])).moments[0].content, 'memory')
-  assert.equal(JSON.parse(execFileSync('unzip', ['-p', target, 'backup-status.json'])).missing.length, 1)
-  assert(execFileSync('unzip', ['-p', target, 'media/photo.jpg']).equals(Buffer.from([1, 2, 3, 4])))
-  console.log('PASS: ZIP contains records, original media bytes, and an explicit missing-file manifest')
+  global.fetch = async (url, opts) => {
+    const id = new URL(url).pathname.slice(1)
+    if (id === 'missing' && opts.method !== 'HEAD') throw new Error('network failure secret')
+    return opts.method === 'HEAD'
+      ? new Response(null, { headers: { 'content-length': String(sizes[id]) } })
+      : new Response(Buffer.from([1, 2, 3, 4]))
+  }
+  try {
+    const files = [{ fileID: 'a', path: 'media/photo.jpg' }, { fileID: 'b', path: 'media/b.jpg' }]
+    const groups = await planFiles(cloud, files)
+    assert.deepEqual(groups.map(group => group.length), [1, 1])
+    assert.equal((await planFiles(cloud, [{ fileID: 'huge' }]))[0][0].size, PART_BYTES + 1)
+    const snapshot = { version: 1, coupleId: 'space', id: 'backup', parts: 1, records: { moments: [{ content: 'memory' }] }, files: [files[0]] }
+    const result = await zipBackupPart(cloud, snapshot, 0, snapshot.files)
+    assert.equal(result.missing, 0)
+    assert.equal(JSON.parse(execFileSync('unzip', ['-p', target, 'records.json'])).moments[0].content, 'memory')
+    assert(execFileSync('unzip', ['-p', target, 'media/photo.jpg']).equals(Buffer.from([1, 2, 3, 4])))
+    await assert.rejects(() => zipBackupPart(cloud, snapshot, 0, [{ fileID: 'missing', path: 'media/missing' }]), /媒体读取失败/)
+    await assert.rejects(() => zipBackupPart(cloud, snapshot, 0, [{ fileID: 'huge', path: 'media/huge' }]), /大小发生变化/)
+    console.log('PASS: byte-based parts, oversized media, legacy ZIP and safe download failure')
+  } finally { global.fetch = originalFetch }
 }
 
 async function main() {
@@ -868,6 +952,7 @@ async function main() {
     await verifyClient()
     await verifyFeedRace()
     await verifyUploadCancellation()
+    await verifyComposeSubmitDraftRace()
     await verifyRecording()
     await verifyVoicePlayback()
     await verifyAdminSafety()
