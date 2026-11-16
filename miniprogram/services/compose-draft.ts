@@ -17,7 +17,7 @@ export interface ComposeDraft {
   pendingResult?: boolean
 }
 
-const copied = new Map<string, string>()
+const copied = new Map<string, Promise<string>>()
 
 export function newPublishId(): string {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`
@@ -42,11 +42,16 @@ async function keepFile(filePath: string, requestId: string): Promise<string> {
   try { fs.mkdirSync(directory, true) } catch { /* already created */ }
   const ext = filePath.match(/\.[a-zA-Z0-9]+$/)?.[0] || '.bin'
   const target = `${directory}/${newPublishId()}${ext}`
-  await new Promise<void>((resolve, reject) => fs.copyFile({
-    srcPath: filePath, destPath: target, success: () => resolve(), fail: reject,
+  const pending = new Promise<string>((resolve, reject) => fs.copyFile({
+    srcPath: filePath, destPath: target, success: () => resolve(target), fail: reject,
   }))
-  copied.set(key, target)
-  return target
+  copied.set(key, pending)
+  try {
+    return await pending
+  } catch (error) {
+    copied.delete(key)
+    throw error
+  }
 }
 
 export async function saveComposeDraft(snapshot: ComposeDraft, editId = ''): Promise<void> {

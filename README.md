@@ -97,14 +97,14 @@ export const CLOUD_ENV_ID = 'your-cloud-env-id'
 
 ### 3. 初始化数据库并部署云函数
 
-在云开发控制台创建以下 **11 个集合**，数据库权限建议配置为仅云函数可读写：
+在云开发控制台创建以下 **12 个集合**，数据库权限建议配置为仅云函数可读写：
 
 | 用途 | 集合 |
 | --- | --- |
 | 空间与回忆 | `couples`、`moments` |
 | 纪念日与回忆互动 | `anniversaries`、`moment_comments`、`moment_likes` |
 | 历史功能数据与兼容接口 | `checkins`、`rants`、`notes` |
-| 授权、邀请与管理员 | `access_codes`、`space_invites`、`admins` |
+| 授权、邀请与管理员 | `access_codes`、`space_invites`、`space_memberships`、`admins` |
 
 按照 [云开发部署说明](./cloud/README.md) 建立对应索引；索引是时间轴、筛选和空间查询正常运行的重要配置。
 
@@ -172,6 +172,8 @@ npm run dev
 | 命令 | 用途 |
 | --- | --- |
 | `npm ci` | 安装根目录依赖。 |
+| `npm --prefix cloudfunctions/ours ci` | 安装核心验证所需的 ZIP 和云函数依赖。 |
+| `npm --prefix cloudfunctions/admin-api ci` | 安装管理台云函数依赖，供核心验证检查 SDK 接口。 |
 | `npm run typecheck` | 检查小程序 TypeScript 类型。 |
 | `npm run verify:core` | 使用本地模拟数据库与微信 API 校验核心流程，不连接线上数据。 |
 | `npm --prefix admin-web ci` | 安装管理台依赖。 |

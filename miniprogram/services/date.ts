@@ -7,8 +7,9 @@ export function todayKey(): string {
 }
 
 export function daysBetween(startISO: string, end: Date = new Date()): number {
-  const s = new Date(startISO + 'T00:00:00')
-  const e = new Date(end.getFullYear(), end.getMonth(), end.getDate())
-  const ms = e.getTime() - s.getTime()
+  const [y, m, d] = startISO.split('-').map(Number)
+  const s = Date.UTC(y, m - 1, d)
+  const e = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate())
+  const ms = e - s
   return Math.max(0, Math.floor(ms / 86400000)) + 1
 }

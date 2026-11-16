@@ -282,7 +282,7 @@ Page({
       year: this.data.dateYear || undefined, month: this.data.dateMonth || undefined,
     }
     const targetCount = preserve ? Math.max(PAGE_SIZE, this.data.skip) : PAGE_SIZE
-    this.setData({ loading: true })
+    this.setData({ loading: true, loadingMore: false })
     try {
       const myRole = getIdentity().role
       const key = feedCacheKey({
@@ -321,8 +321,10 @@ Page({
       } else this.setData({ onThisDay: [] })
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
-      if (revision === this.feedRevision) this.setData({ loadError: msg })
-      wx.showToast({ title: msg, icon: 'none' })
+      if (revision === this.feedRevision) {
+        this.setData({ loadError: msg })
+        wx.showToast({ title: msg, icon: 'none' })
+      }
     } finally {
       if (revision === this.feedRevision) this.setData({ loading: false })
     }

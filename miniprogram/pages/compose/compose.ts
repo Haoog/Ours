@@ -1,3 +1,4 @@
+import { resolveCloudUrl } from '../../utils/cloud-url-cache'
 // pages/compose/compose.ts —— 发布动态（图文 / 视频 / 语音 / 实况）
 
 import { addMoment, getMoment, updateMoment, getCouple, getIdentity, listMomentsPage, cancelMomentUpload } from '../../services/store'
@@ -16,6 +17,34 @@ import { getThemeStyle, syncTheme } from '../../services/theme'
 const PICK_BATCH = 20
 // 微信 RecorderManager 单条录音最长支持 600 秒；语音无法像文字一样真正无限。
 const MAX_VOICE_SEC = 600
+
+type RecordingCallbacks = {
+  started: () => void
+  stopped: WechatMiniprogram.RecorderManagerOnStopCallback
+  failed: (error: unknown) => void
+}
+
+// RecorderManager is shared across pages and its listeners cannot be removed.
+let recorderManager: WechatMiniprogram.RecorderManager | undefined
+let activeRecording: RecordingCallbacks | undefined
+
+function getVoiceRecorder() {
+  if (recorderManager) return recorderManager
+  const recorder = wx.getRecorderManager()
+  recorder.onStart(() => activeRecording?.started())
+  recorder.onStop(result => {
+    const recording = activeRecording
+    activeRecording = undefined
+    recording?.stopped(result)
+  })
+  recorder.onError(error => {
+    const recording = activeRecording
+    activeRecording = undefined
+    recording?.failed(error)
+  })
+  recorderManager = recorder
+  return recorder
+}
 
 interface VoiceDraft {
   path: string
@@ -53,7 +82,10 @@ Page({
     video: '' as string,
     videoCover: '' as string,
     voice: null as VoiceDraft | null,
+    voicePlaying: false,
+    voiceLoading: false,
     recording: false,
+    recordPending: false,
     recordSec: 0,
     location: '' as string,
     locationFull: null as MomentLocation | null,
@@ -75,7 +107,12 @@ Page({
     mediaRemaining: 0,
   },
 
+  voiceAudio: null as WechatMiniprogram.InnerAudioContext | null,
+  voiceAttempt: 0,
   recorder: null as WechatMiniprogram.RecorderManager | null,
+  recordStartedAt: 0,
+  ownsRecording: false,
+  pageHidden: false,
   recordTimer: 0 as ReturnType<typeof setInterval> | number,
   draftTimer: 0 as ReturnType<typeof setTimeout> | number,
   skipDraftSaveOnUnload: false,
@@ -102,7 +139,8 @@ Page({
       minMomentDate: couple?.startDate ?? '1970-01-01',
       maxMomentDate: momentDate,
     })
-    this.initRecorder()
+    if (this.unloaded) return
+    this.recorder = getVoiceRecorder()
     this.requestId = newPublishId()
     this.editId = options.id || ''
     if (this.editId) {
@@ -130,12 +168,19 @@ Page({
     this.updateMediaRemaining()
   },
 
+  onShow() {
+    this.pageHidden = false
+  },
+
   onHide() {
+    this.pageHidden = true
+    this.stopVoicePreview()
     if (this.data.recording) this.recorder?.stop()
     if (!this.skipDraftSaveOnUnload) this.saveDraft()
   },
 
   onUnload() {
+    this.stopVoicePreview()
     this.imageDragState = null
     this.stopRecordTimer()
     if (this.draftTimer) {
@@ -143,10 +188,8 @@ Page({
       this.draftTimer = 0
     }
     if (!this.skipDraftSaveOnUnload) this.saveDraft()
-    if (this.data.recording && this.recorder) {
-      this.recorder.stop()
-    }
     this.unloaded = true
+    if (this.ownsRecording && this.data.recording) this.recorder?.stop()
   },
 
   restoreDraft() {
@@ -190,36 +233,36 @@ Page({
     } catch (e) {}
   },
 
-  initRecorder() {
-    const recorder = wx.getRecorderManager()
-    this.recorder = recorder
+  finishRecording(result: WechatMiniprogram.OnStopListenerResult) {
+    this.ownsRecording = false
+    const elapsed = this.recordStartedAt ? Date.now() - this.recordStartedAt : 0
+    this.recordStartedAt = 0
+    this.stopRecordTimer()
+    if (this.unloaded) return
+    this.setData({ recording: false, recordPending: false, recordSec: 0 })
+    if (!result.tempFilePath) {
+      wx.showToast({ title: '未生成录音文件，请重试', icon: 'none' })
+      return
+    }
+    const durationMs = result.duration > 0 ? result.duration : elapsed
+    if (durationMs < 1000) {
+      wx.showToast({ title: '录音太短，请录满 1 秒', icon: 'none' })
+      return
+    }
+    const voice = { path: result.tempFilePath, duration: Math.round(durationMs / 1000) }
+    this.setData({ voice, canPost: this.syncCanPost({ voice }) })
+    this.updateMediaRemaining()
+    this.scheduleDraftSave()
+  },
 
-    recorder.onStop(res => {
-      if (this.unloaded) return
-      this.stopRecordTimer()
-      const duration = Math.max(1, Math.round((res.duration || 0) / 1000))
-      if ((res.duration || 0) < 1000) {
-        this.setData({ recording: false, recordSec: 0 })
-        wx.showToast({ title: '录音太短', icon: 'none' })
-        return
-      }
-      const voice = { path: res.tempFilePath, duration }
-      this.setData({
-        recording: false,
-        recordSec: 0,
-        voice,
-        canPost: this.computeCanPost(this.data.content, this.data.images, this.data.livePhotos, this.data.video, voice),
-      })
-      this.updateMediaRemaining()
-      this.scheduleDraftSave()
-    })
-
-    recorder.onError(() => {
-      if (this.unloaded) return
-      this.stopRecordTimer()
-      this.setData({ recording: false, recordSec: 0 })
-      wx.showToast({ title: '录音失败', icon: 'none' })
-    })
+  failRecording(error: unknown) {
+    this.ownsRecording = false
+    this.recordStartedAt = 0
+    this.stopRecordTimer()
+    console.warn('Voice recording failed', error)
+    if (this.unloaded) return
+    this.setData({ recording: false, recordPending: false, recordSec: 0 })
+    wx.showToast({ title: '录音启动失败，请检查麦克风', icon: 'none' })
   },
 
   stopRecordTimer() {
@@ -524,28 +567,85 @@ Page({
     this.scheduleDraftSave()
   },
 
+  stopVoicePreview() {
+    this.voiceAttempt++
+    const audio = this.voiceAudio
+    this.voiceAudio = null
+    if (audio) { audio.stop(); audio.destroy() }
+    if (!this.unloaded) this.setData({ voicePlaying: false, voiceLoading: false })
+  },
+
+  async onToggleVoicePreview() {
+    const voice = this.data.voice
+    if (!voice || this.pageHidden || this.data.recording || this.data.recordPending) return
+    if (this.data.voiceLoading) { this.stopVoicePreview(); return }
+    if (this.voiceAudio) {
+      try {
+        if (this.data.voicePlaying) this.voiceAudio.pause()
+        else this.voiceAudio.play()
+      } catch {
+        this.stopVoicePreview()
+        wx.showToast({ title: '语音播放失败，请重试', icon: 'none' })
+      }
+      return
+    }
+    const attempt = ++this.voiceAttempt
+    this.setData({ voiceLoading: true })
+    try {
+      const url = await resolveCloudUrl(voice.path)
+      if (attempt !== this.voiceAttempt || this.pageHidden || this.unloaded) return
+      if (!url) throw new Error('语音文件不可用')
+      const audio = wx.createInnerAudioContext()
+      this.voiceAudio = audio
+      const active = () => this.voiceAudio === audio && attempt === this.voiceAttempt
+      audio.onPlay(() => { if (active()) this.setData({ voicePlaying: true, voiceLoading: false }) })
+      audio.onPause(() => { if (active()) this.setData({ voicePlaying: false }) })
+      audio.onEnded(() => { if (active()) this.stopVoicePreview() })
+      audio.onError(() => {
+        if (!active()) return
+        this.stopVoicePreview()
+        wx.showToast({ title: '语音播放失败，请重试', icon: 'none' })
+      })
+      audio.src = url
+      audio.play()
+    } catch {
+      if (attempt !== this.voiceAttempt || this.unloaded) return
+      this.stopVoicePreview()
+      wx.showToast({ title: '语音播放失败，请重试', icon: 'none' })
+    }
+  },
+
   onRemoveVoice() {
+    this.stopVoicePreview()
     this.setData({ voice: null, canPost: this.syncCanPost({ voice: null }) })
     this.updateMediaRemaining()
     this.scheduleDraftSave()
   },
 
   onToggleRecord() {
-    if (this.data.editing || (!this.data.voice && this.mediaSlots() < 1)) return
-    if (!this.recorder) return
+    if (this.data.editing || this.data.posting || this.data.pendingResult || this.data.recordPending) return
+    if (!this.recorder) {
+      wx.showToast({ title: '页面尚未准备好，请稍后重试', icon: 'none' })
+      return
+    }
+    if (!this.data.voice && this.mediaSlots() < 1) {
+      wx.showToast({ title: '媒体数量已达上限', icon: 'none' })
+      return
+    }
 
     if (this.data.voice && !this.data.recording) {
       wx.showModal({
         title: '重新录音？',
         content: '会替换当前这条语音',
         success: res => {
-          if (res.confirm) this.setData({ voice: null }, () => this.startRecord())
+          if (res.confirm) { this.stopVoicePreview(); this.startRecord() }
         },
       })
       return
     }
 
     if (this.data.recording) {
+      this.setData({ recordPending: true })
       this.recorder.stop()
       return
     }
@@ -554,17 +654,37 @@ Page({
   },
 
   startRecord() {
-    if (!this.recorder) return
+    if (!this.recorder || this.data.recordPending || this.unloaded) return
+    this.setData({ recordPending: true })
     wx.authorize({
       scope: 'scope.record',
       success: () => this.doStartRecord(),
-      fail: () => {
+      fail: error => {
+        console.warn('Microphone authorization failed', error)
+        if (this.unloaded) return
         wx.showModal({
           title: '需要麦克风权限',
           content: '请在设置中允许录音，才能发语音',
           confirmText: '去设置',
           success: r => {
-            if (r.confirm) wx.openSetting({})
+            if (this.unloaded) return
+            if (!r.confirm) {
+              this.setData({ recordPending: false })
+              return
+            }
+            wx.openSetting({
+              success: settings => {
+                if (this.unloaded) return
+                if (settings.authSetting['scope.record']) this.doStartRecord()
+                else this.setData({ recordPending: false })
+              },
+              fail: () => {
+                if (!this.unloaded) this.setData({ recordPending: false })
+              },
+            })
+          },
+          fail: () => {
+            if (!this.unloaded) this.setData({ recordPending: false })
           },
         })
       },
@@ -572,21 +692,41 @@ Page({
   },
 
   doStartRecord() {
-    if (!this.recorder) return
-    this.setData({ recording: true, recordSec: 0 })
-    this.recorder.start({
-      duration: MAX_VOICE_SEC * 1000,
-      format: 'mp3',
-      sampleRate: 44100,
-      numberOfChannels: 1,
-    })
-    this.recordTimer = setInterval(() => {
-      const sec = this.data.recordSec + 1
-      this.setData({ recordSec: sec })
-      if (sec >= MAX_VOICE_SEC && this.recorder) {
-        this.recorder.stop()
-      }
-    }, 1000)
+    const recorder = this.recorder
+    if (!recorder || this.unloaded) return
+    if (this.pageHidden || activeRecording) {
+      this.setData({ recordPending: false })
+      if (!this.pageHidden) wx.showToast({ title: '上一段录音正在结束，请稍后重试', icon: 'none' })
+      return
+    }
+    this.ownsRecording = true
+    activeRecording = {
+      started: () => {
+        if (this.unloaded || this.pageHidden) {
+          recorder.stop()
+          return
+        }
+        this.recordStartedAt = Date.now()
+        this.setData({ recording: true, recordPending: false, recordSec: 0 })
+        this.recordTimer = setInterval(() => {
+          this.setData({ recordSec: Math.floor((Date.now() - this.recordStartedAt) / 1000) })
+        }, 1000)
+      },
+      stopped: result => this.finishRecording(result),
+      failed: error => this.failRecording(error),
+    }
+    try {
+      recorder.start({
+        duration: MAX_VOICE_SEC * 1000,
+        format: 'mp3',
+        sampleRate: 44100,
+        encodeBitRate: 96000,
+        numberOfChannels: 1,
+      })
+    } catch (error) {
+      activeRecording = undefined
+      this.failRecording(error)
+    }
   },
 
   onPickLocation() {
@@ -603,8 +743,14 @@ Page({
         this.scheduleDraftSave()
       },
       fail: err => {
-        if (err.errMsg && err.errMsg.indexOf('cancel') === -1) {
-          wx.showToast({ title: '取景地选择已取消', icon: 'none' })
+        const message = (err.errMsg || '').toLowerCase()
+        if (message.includes('cancel')) return
+        if (/auth deny|auth denied|permission|authorize|scope\.userlocation/.test(message)) {
+          wx.showModal({ title: '需要位置权限', content: '请在小程序设置中允许使用位置信息，然后重新选择地点。也请检查手机系统的位置权限。', confirmText: '去设置', success: res => {
+            if (res.confirm) wx.openSetting({ fail: () => wx.showToast({ title: '无法打开设置，请手动前往设置', icon: 'none' }) })
+          } })
+        } else {
+          wx.showToast({ title: '地点选择失败，请重试', icon: 'none' })
         }
       },
     })
@@ -645,15 +791,14 @@ Page({
   },
 
   async onSubmit() {
+    if (this.data.recording || this.data.recordPending) {
+      wx.showToast({ title: '请先结束录音', icon: 'none' })
+      return
+    }
     if (!this.data.canPost || this.data.posting) {
       if (!this.data.canPost) wx.showToast({ title: '写点内容或加点媒体吧', icon: 'none' })
       return
     }
-    if (this.data.recording) {
-      wx.showToast({ title: '请先结束录音', icon: 'none' })
-      return
-    }
-
     this.setData({ posting: true, uploadProgress: 0, uploadHint: '准备上传…' })
     try {
       this.saveDraft()

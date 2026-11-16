@@ -97,14 +97,14 @@ export const CLOUD_ENV_ID = 'your-cloud-env-id'
 
 ### 3. Initialize the database and deploy cloud functions
 
-Create these **11 collections** in the Cloud Development console. Configure database permissions to allow reads and writes only through cloud functions:
+Create these **12 collections** in the Cloud Development console. Configure database permissions to allow reads and writes only through cloud functions:
 
 | Purpose | Collections |
 | --- | --- |
 | Spaces and memories | `couples`, `moments` |
 | Anniversaries and memory interactions | `anniversaries`, `moment_comments`, `moment_likes` |
 | Historical feature data and compatibility APIs | `checkins`, `rants`, `notes` |
-| Activation, invitations, and administrators | `access_codes`, `space_invites`, `admins` |
+| Activation, invitations, and administrators | `access_codes`, `space_invites`, `space_memberships`, `admins` |
 
 Create the corresponding indexes using the [cloud deployment guide](./cloud/README.md) (Chinese). Indexes are an important part of configuring timeline, filter, and space queries.
 
@@ -172,6 +172,8 @@ Run these commands from the **repository root**:
 | Command | Purpose |
 | --- | --- |
 | `npm ci` | Install root dependencies. |
+| `npm --prefix cloudfunctions/ours ci` | Install ZIP and cloud function dependencies required by core verification. |
+| `npm --prefix cloudfunctions/admin-api ci` | Install admin cloud function dependencies for the SDK smoke test. |
 | `npm run typecheck` | Check Mini Program TypeScript types. |
 | `npm run verify:core` | Verify core workflows with a local mock database and WeChat APIs, without connecting to production data. |
 | `npm --prefix admin-web ci` | Install admin console dependencies. |

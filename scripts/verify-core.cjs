@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict')
+const { createHash } = require('node:crypto')
+const { EventEmitter } = require('node:events')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
@@ -21,6 +23,18 @@ function loadTS(file, imports = {}, globals = {}) {
 }
 
 async function verifyServer() {
+  const realSdk = require(path.join(root, 'cloudfunctions/ours/node_modules/wx-server-sdk'))
+  realSdk.init({ env: 'offline-test' })
+  const realCommand = realSdk.database().command
+  const { UpdateSerializer } = require(path.join(root, 'cloudfunctions/ours/node_modules/@cloudbase/database/dist/commonjs/serializer/update'))
+  const replacement = { tickets: {}, backup: null }
+  const serialized = UpdateSerializer.encode({ spaceGate: realCommand.set(replacement) })
+  assert.deepEqual(serialized, { $set: { spaceGate: replacement } })
+  assert.deepEqual(UpdateSerializer.encode({ spaceGate: replacement }), { $set: { 'spaceGate.backup': null } })
+  const existing = { spaceGate: { tickets: { old: 123 }, backup: null } }
+  Object.assign(existing, serialized.$set)
+  assert.deepEqual(existing.spaceGate.tickets, {})
+  console.log('PASS: real SDK atomically replaces gate including empty tickets')
   let documents = { couples: {
     space: {
       _id: 'space', memberA: { openid: 'a' }, memberB: { openid: 'b' },
@@ -30,13 +44,65 @@ async function verifyServer() {
   }, moments: {}, moment_likes: {}, moment_comments: {}, rants: {} }
   const removedFiles = []
   let failFiles = false
+  let omitDeleteResults = false
   let failTransaction = false
+  let failRegistration = false
+  let afterQuery = null
+  let currentOpenid = 'a'
+  let uploadHook = null
+  let zipHook = null
+  let measureHook = null
+  let transactionTail = Promise.resolve()
+  const snapshotContents = new Map()
+  let nextResponse = { statusCode: 200, headers: { 'content-length': '300' } }
+  const fakeHttps = {
+    request(url, options, callback) {
+      const request = new EventEmitter()
+      request.destroy = () => {}
+      request.end = () => setImmediate(() => callback({ ...nextResponse, destroy() {} }))
+      return request
+    },
+  }
+  const matches = (row, filter) => {
+    if (filter.or) return filter.or.some(part => matches(row, part))
+    return Object.entries(filter).every(([key, expected]) => {
+      const actual = key.split('.').reduce((value, part) => value?.[part], row)
+      if (expected?.gt !== undefined) return actual > expected.gt
+      if (expected?.lt !== undefined) return actual < expected.lt
+      if (expected?.in) return expected.in.includes(actual)
+      return actual === expected
+    })
+  }
   const db = {
-    command: { remove: () => ({ remove: true }) },
+    command: {
+      remove: () => ({ remove: true }),
+      set: value => ({ __set: value }),
+      or: or => ({ or }),
+      gt: gt => ({ gt }),
+      lt: lt => ({ lt }),
+      in: values => ({ in: values }),
+    },
     collection(name) {
       documents[name] ||= {}
-      const query = filter => ({
-        async get() { return { data: Object.values(documents[name]).filter(row => Object.entries(filter).every(([key, value]) => row[key] === value)).map(clone) } },
+      const query = (filter, offset = 0, size = 100, order = []) => ({
+        skip(value) { return query(filter, value, size, order) },
+        limit(value) { return query(filter, offset, value, order) },
+        orderBy(field, direction) { return query(filter, offset, size, [...order, [field, direction]]) },
+        field() { return this },
+        async count() { return { total: Object.values(documents[name]).filter(row => matches(row, filter)).length } },
+        async get() {
+          const rows = Object.values(documents[name]).filter(row => matches(row, filter))
+          rows.sort((a, b) => {
+            for (const [key, direction] of order) {
+              if (a[key] === b[key]) continue
+              return (a[key] > b[key] ? 1 : -1) * (direction === 'asc' ? 1 : -1)
+            }
+            return 0
+          })
+          const result = { data: rows.slice(offset, offset + size).map(clone) }
+          if (afterQuery) await afterQuery(name, result)
+          return result
+        },
         async remove() {
           for (const row of (await this.get()).data) delete documents[name][row._id]
         },
@@ -51,13 +117,19 @@ async function verifyServer() {
             async update({ data }) {
               const doc = documents[name][id]
               assert(doc)
-              for (const [key, value] of Object.entries(data)) {
+              if (failRegistration && Object.keys(data).some(key => key.startsWith('mediaCleanup.'))) throw new Error('registration unavailable')
+              const apply = (key, value) => {
+                if (value && typeof value === 'object' && !Array.isArray(value) && !value.remove && !Object.hasOwn(value, '__set')) {
+                  for (const [child, item] of Object.entries(value)) apply(`${key}.${child}`, item)
+                  return
+                }
                 const keys = key.split('.')
                 let object = doc
                 for (const part of keys.slice(0, -1)) object = object[part] ||= {}
                 if (value?.remove) delete object[keys.at(-1)]
-                else object[keys.at(-1)] = clone(value)
+                else object[keys.at(-1)] = clone(value && Object.hasOwn(value, '__set') ? value.__set : value)
               }
+              for (const [key, value] of Object.entries(data)) apply(key, value)
             },
           }
         },
@@ -65,30 +137,75 @@ async function verifyServer() {
     },
     async runTransaction(run) {
       if (failTransaction) throw new Error('transaction unavailable')
+      let unlock
+      const previous = transactionTail
+      transactionTail = new Promise(resolve => { unlock = resolve })
+      await previous
       const before = clone(documents)
-      try { return await run(db) } catch (error) { documents = before; throw error }
+      const transaction = { collection: name => ({ doc: db.collection(name).doc }) }
+      try { return await run(transaction) } catch (error) { documents = before; throw error } finally { unlock() }
     },
   }
   const sdk = {
-    init() {}, database: () => db,
+    init() {}, database: () => db, getWXContext: () => ({ OPENID: currentOpenid }),
+    async uploadFile({ cloudPath, fileContent }) {
+      const fileID = `cloud://test.bucket/${cloudPath}`
+      snapshotContents.set(fileID, JSON.parse(fileContent.toString('utf8')))
+      if (uploadHook) await uploadHook(fileID)
+      return { fileID }
+    },
+    async getTempFileURL({ fileList }) {
+      return { fileList: fileList.map(fileID => ({ fileID, tempFileURL: 'https://example.invalid/media', status: 0 })) }
+    },
+    async downloadFile({ fileID }) {
+      if (!snapshotContents.has(fileID)) throw new Error('download unavailable')
+      return { fileContent: Buffer.from(JSON.stringify(snapshotContents.get(fileID))) }
+    },
     async deleteFile({ fileList }) {
       if (!failFiles) removedFiles.push(...fileList)
+      if (omitDeleteResults) return { fileList: [] }
       return { fileList: fileList.map(fileID => ({ fileID, status: failFiles ? -503001 : 0 })) }
     },
   }
   const context = vm.createContext({
-    exports: {}, console, Date, Buffer,
-    require: id => id === 'wx-server-sdk' ? sdk : require(id),
+    exports: {}, console, Date, Buffer, process: { env: {} },
+    require: id => id === 'wx-server-sdk' ? sdk : id === 'https' ? fakeHttps : id === './backup' && zipHook ? { zipBackupPart: zipHook } : require(id),
     readRecords: name => Object.values(documents[name] || {}).map(clone),
+    onMeasure: async () => { if (measureHook) await measureHook() },
   })
   vm.runInContext(fs.readFileSync(path.join(root, 'cloudfunctions/ours/index.js'), 'utf8') + `
     assertTextSafe = async () => {};
-    getAllByWhere = async name => readRecords(name);
-    measureCloudFileBytes = async ids => ids.length * 100;
-    globalThis.api = { addMoment, deleteMoment, cleanupUploadedFiles, drainMediaCleanup, updateMoment, setMomentLike, compareMomentOrder };
+    measureCloudFileSizes = async ids => { await onMeasure(); return new Map(ids.map(id => [id, 100])); };
+    measureCloudFileBytes = async ids => { await onMeasure(); return ids.length * 100; };
+    globalThis.api = { addMoment, deleteMoment, cleanupUploadedFiles, drainMediaCleanup, updateMoment, setMomentLike, compareMomentOrder,
+      createPartnerInvite, joinPartnerInvite, getAllByWhere, redeemAccessCode, seedDemoData, queryMomentsPage, getMomentNeighbors, deleteCloudFiles, cloudFileInPath,
+      prevDayKey, daysUntilAnniversary, dateKeyEpoch, rebuildUsage, listComments, listAnniversaries, deleteComment, deleteAnniversary,
+      addComment, addAnniversary, updateStartDate, requestContentLength, listMapPlaces, listMomentCollections };
   `, context)
   const api = context.api
+  assert.equal(api.prevDayKey('2024-03-01'), '2024-02-29')
+  assert.equal(api.prevDayKey('2026-01-01'), '2025-12-31')
+  assert(Number.isNaN(api.dateKeyEpoch('2026-02-29')))
+  assert.equal(api.daysUntilAnniversary('2020-02-29', true, new Date('2025-02-27T16:00:00Z')), 0)
+  assert.equal(api.daysUntilAnniversary('2020-02-29', true, new Date('2025-02-28T16:00:00Z')), 364)
+  assert.equal(await api.requestContentLength('https://example.invalid/file'), 300)
+  nextResponse = { statusCode: 206, headers: { 'content-length': '1', 'content-range': 'bytes 0-0/300' } }
+  assert.equal(await api.requestContentLength('https://example.invalid/file', 'GET'), 300)
+  nextResponse = { statusCode: 206, headers: { 'content-length': '1' } }
+  assert.equal(await api.requestContentLength('https://example.invalid/file', 'GET'), null)
+  nextResponse = { statusCode: 404, headers: { 'content-length': '100' } }
+  assert.equal(await api.requestContentLength('https://example.invalid/file'), null)
   const image = 'cloud://test.bucket/moments/space/images/image.jpg'
+  assert(api.cloudFileInPath(image, 'moments/space/'))
+  assert(!api.cloudFileInPath('cloud://test.bucket/moments/other/moments/space/file.jpg', 'moments/space/'))
+  assert(!api.cloudFileInPath('cloud://test.bucket/moments/space/../other/file.jpg', 'moments/space/'))
+  omitDeleteResults = true
+  assert.equal((await api.deleteCloudFiles([image])).length, 1)
+  omitDeleteResults = false
+  removedFiles.length = 0
+  await assert.rejects(() => api.addMoment('a', { coupleId: 'space', requestId: 'empty_request', momentDate: '2026-10-13' }), /请填写/)
+  await assert.rejects(() => api.updateStartDate('a', { coupleId: 'space', startDate: '2026-02-29' }), /日期格式/)
+  await assert.rejects(() => api.addAnniversary('a', { coupleId: 'space', title: '生日', date: '2026-02-29' }), /日期格式/)
   const payload = { coupleId: 'space', requestId: 'request_123456', content: 'first', momentDate: '2026-10-13', images: [image] }
   const first = await api.addMoment('a', payload)
   const repeat = await api.addMoment('a', payload)
@@ -127,10 +244,245 @@ async function verifyServer() {
     { momentDate: '2026-10-13', createdAt: new Date('2026-10-13T10:00:50+08:00').getTime() },
   ) < 0)
   console.log('PASS: publish deduplication, protected media, transaction rollback, cleanup retry, edit ownership, stable likes, chronological order')
+
+  documents.paging = Object.fromEntries(['a', 'b', 'c', 'd', 'e'].map(id => [id, { _id: id, coupleId: 'space' }]))
+  afterQuery = async name => {
+    if (name === 'paging') { delete documents.paging.a; afterQuery = null }
+  }
+  const paged = await api.getAllByWhere('paging', { coupleId: 'space' }, { batchSize: 2 })
+  assert.deepEqual(Array.from(paged, row => row._id), ['a', 'b', 'c', 'd', 'e'])
+
+  documents.paging = {
+    a: { _id: 'a', coupleId: 'space', momentDate: '2020-01-01', createdAt: 1 },
+    b: { _id: 'b', coupleId: 'space', momentDate: '2024-01-01', createdAt: 1 },
+    c: { _id: 'c', coupleId: 'space', momentDate: '2024-01-01', createdAt: 2 },
+  }
+  const sorted = await api.getAllByWhere('paging', { coupleId: 'space' }, { batchSize: 2, orderBy: [['momentDate', 'desc'], ['createdAt', 'desc']] })
+  assert.deepEqual(Array.from(sorted, row => row._id), ['c', 'b', 'a'])
+
+  const snapshotID = 'cloud://test.bucket/backups/space/test/snapshot.json'
+  const snapshot = { coupleId: 'space', records: { exportedAt: Date.now() }, files: [{ fileID: image }] }
+  snapshotContents.set(snapshotID, snapshot)
+  documents.couples.space.mediaCleanup = {
+    snapshot: { fileIDs: [snapshotID], readyAt: Date.now() + 86400000 },
+    media: { fileIDs: [image], readyAt: 0 },
+  }
+  removedFiles.length = 0
+  await api.drainMediaCleanup('space')
+  assert(!removedFiles.includes(image))
+  assert.deepEqual(documents.couples.space.mediaCleanup.media.fileIDs, [image])
+  documents.couples.space.mediaCleanup.media.readyAt = 0
+  snapshotContents.delete(snapshotID)
+  await assert.rejects(() => api.drainMediaCleanup('space'), /download unavailable/)
+  assert(!removedFiles.includes(image))
+  assert(documents.couples.space.mediaCleanup.media)
+  snapshot.records.exportedAt = Date.now() - 86400000 - 15 * 60 * 1000 - 1
+  snapshotContents.set(snapshotID, snapshot)
+  await api.drainMediaCleanup('space')
+  assert(removedFiles.includes(image), 'Expired snapshot media can be cleaned')
+  delete documents.couples.space.mediaCleanup.snapshot
+  console.log('PASS: ordered pagination, registered snapshot media retention, download failure and expiry')
+
+  // Exercise the actual entry point while requests are paused inside their work.
+  const invoke = (action, payload = {}) => context.exports.main({ action, payload: { coupleId: 'space', ...payload } })
+  let resumeQuery, queryEntered
+  const queryStarted = new Promise(resolve => { queryEntered = resolve })
+  const queryRelease = new Promise(resolve => { resumeQuery = resolve })
+  afterQuery = async name => {
+    if (name === 'moments') { afterQuery = null; queryEntered(); await queryRelease }
+  }
+  const reading = invoke('listMoments')
+  await queryStarted
+  const blockedBackup = await invoke('startBackup')
+  assert.equal(blockedBackup.ok, false)
+  assert.match(blockedBackup.error, /备份或处理/)
+  resumeQuery()
+  await reading
+  assert.equal(Object.keys(documents.couples.space.spaceGate.tickets).length, 0)
+  const raceImage = 'cloud://test.bucket/moments/space/images/race.jpg'
+  documents.couples.space.mediaCleanup = { race: { fileIDs: [raceImage], readyAt: 0 } }
+  let resumeScan, scanEntered
+  const scanStarted = new Promise(resolve => { scanEntered = resolve })
+  const scanRelease = new Promise(resolve => { resumeScan = resolve })
+  afterQuery = async name => {
+    if (name === 'moments') { afterQuery = null; scanEntered(); await scanRelease }
+  }
+  const maintenance = invoke('deleteMoment', { momentId: 'missing' })
+  await scanStarted
+  const racingPublish = await invoke('addMoment', { requestId: 'race_request_123', content: 'race', momentDate: '2026-10-13', images: [raceImage] })
+  assert.equal(racingPublish.ok, false)
+  assert.match(racingPublish.error, /备份或处理/)
+  const bootDuringMaintenance = await invoke('bootstrap')
+  assert.equal(bootDuringMaintenance.ok, true, bootDuringMaintenance.error)
+  assert(documents.couples.space.mediaCleanup.race)
+  resumeScan()
+  assert.equal((await maintenance).ok, true)
+  assert(removedFiles.includes(raceImage))
+  const publishedImage = 'cloud://test.bucket/moments/space/images/publish-race.jpg'
+  documents.couples.space.mediaCleanup = { publishRace: { fileIDs: [publishedImage], readyAt: 0 } }
+  let resumeMeasure, measureEntered
+  const measureStarted = new Promise(resolve => { measureEntered = resolve })
+  const measureRelease = new Promise(resolve => { resumeMeasure = resolve })
+  measureHook = async () => { measureHook = null; measureEntered(); await measureRelease }
+  const publishing = invoke('addMoment', { requestId: 'publish_race_123', content: 'published', momentDate: '2026-10-13', images: [publishedImage] })
+  await measureStarted
+  const blockedMaintenance = await invoke('deleteMoment', { momentId: 'missing' })
+  assert.equal(blockedMaintenance.ok, false)
+  const busyBoot = await invoke('bootstrap')
+  assert.equal(busyBoot.ok, true, busyBoot.error)
+  assert(documents.couples.space.mediaCleanup.publishRace)
+  resumeMeasure()
+  const published = await publishing
+  assert.equal(published.ok, true)
+  assert.equal((await invoke('deleteMoment', { momentId: 'missing' })).ok, true)
+  assert(!removedFiles.includes(publishedImage), 'Published media survives subsequent maintenance')
+  assert.equal((await invoke('deleteMoment', { momentId: published.data.id })).ok, true)
+  const invalidWrite = await invoke('updateStartDate', { startDate: 'invalid' })
+  assert.equal(invalidWrite.ok, false)
+  // A failed action must release its ticket.
+  assert.equal(Object.keys(documents.couples.space.spaceGate.tickets).length, 0)
+
+  currentOpenid = 'stranger'
+  const denied = await invoke('startBackup')
+  assert.equal(denied.ok, false)
+  assert.equal(Object.keys(documents.couples.space.spaceGate.tickets).length, 0)
+  assert.equal(documents.couples.space.spaceGate.backup, null)
+  currentOpenid = 'a'
+
+  const protectedImage = 'cloud://test.bucket/moments/space/images/protected.jpg'
+  documents.moments.concurrent = { _id: 'concurrent', coupleId: 'space', images: [protectedImage], authorRole: 'A', createdAt: Date.now(), momentDate: '2026-01-01' }
+  let releaseUpload, uploadEntered
+  const uploadStarted = new Promise(resolve => { uploadEntered = resolve })
+  const uploadRelease = new Promise(resolve => { releaseUpload = resolve })
+  uploadHook = async () => { uploadEntered(); await uploadRelease }
+  const creating = invoke('startBackup')
+  await uploadStarted
+  const blockedDelete = await invoke('deleteMoment', { momentId: 'concurrent' })
+  assert.equal(blockedDelete.ok, false)
+  assert(!removedFiles.includes(protectedImage))
+  assert(documents.moments.concurrent)
+  const blockedBootstrap = await context.exports.main({ action: 'bootstrap', payload: {} })
+  assert.equal(blockedBootstrap.ok, true, blockedBootstrap.error)
+  releaseUpload()
+  const created = await creating
+  uploadHook = null
+  assert.equal(created.ok, true, created.error)
+  const deleted = await invoke('deleteMoment', { momentId: 'concurrent' })
+  assert.equal(deleted.ok, true, deleted.error)
+  assert(!removedFiles.includes(protectedImage), 'Registered snapshot protects deleted media')
+  failRegistration = true
+  let failedSnapshot
+  uploadHook = async fileID => { failedSnapshot = fileID }
+  const failedBackup = await invoke('startBackup')
+  assert.equal(failedBackup.ok, false)
+  assert(removedFiles.includes(failedSnapshot), 'Unregistered snapshot is deleted')
+  uploadHook = null
+  const failedZip = 'cloud://test.bucket/backups/space/test/part-1.zip'
+  zipHook = async () => ({ fileID: failedZip, missing: 0 })
+  const failedExport = await invoke('exportBackupPart', { snapshotFileID: created.data.snapshotFileID, part: 0 })
+  assert.equal(failedExport.ok, false)
+  assert(removedFiles.includes(failedZip), 'Unregistered ZIP is deleted')
+  zipHook = null
+  failRegistration = false
+  const registered = snapshotContents.get(created.data.snapshotFileID)
+  registered.records.exportedAt = Date.now() - 86400000 - 1
+  for (const task of Object.values(documents.couples.space.mediaCleanup)) {
+    if (task.fileIDs.includes(created.data.snapshotFileID)) task.readyAt = 0
+  }
+  for (const task of Object.values(documents.couples.space.mediaCleanup)) {
+    if (task.fileIDs.includes(protectedImage)) task.readyAt = 0
+  }
+  await api.drainMediaCleanup('space')
+  assert(!removedFiles.includes(protectedImage), 'Grace protects an export started before expiry')
+  assert(!removedFiles.includes(created.data.snapshotFileID), 'Grace protects older snapshot registrations')
+  registered.records.exportedAt -= 15 * 60 * 1000
+  for (const task of Object.values(documents.couples.space.mediaCleanup)) {
+    if (task.fileIDs.includes(protectedImage)) task.readyAt = 0
+  }
+  await api.drainMediaCleanup('space')
+  assert(removedFiles.includes(protectedImage), 'Expired protection eventually releases media')
+  documents.couples.space.spaceGate = { tickets: { stale: Date.now() - 1 }, backup: { token: 'stale', expiresAt: Date.now() - 1 } }
+  const recovered = await invoke('startBackup')
+  assert.equal(recovered.ok, true, recovered.error)
+  assert.equal(documents.couples.space.spaceGate.backup, null)
+  assert.equal(Object.keys(documents.couples.space.spaceGate.tickets).length, 0)
+  console.log('PASS: entry point leases, authorization, snapshot registration, grace and recovery')
+
+  const hash = value => createHash('sha256').update(value).digest('hex')
+  documents.couples.latest = { _id: 'latest', memberA: { openid: 'latest-owner' }, memberB: null }
+  documents.space_invites = { legacy: { _id: 'legacy', coupleId: 'latest', tokenHash: hash('old'), status: 'active' } }
+  const firstInvite = await api.createPartnerInvite('latest-owner', { coupleId: 'latest' })
+  failTransaction = true
+  await assert.rejects(() => api.createPartnerInvite('latest-owner', { coupleId: 'latest' }), /transaction unavailable/)
+  failTransaction = false
+  assert.equal(documents.couples.latest.inviteTokenHash, hash(firstInvite.token))
+  const secondInvite = await api.createPartnerInvite('latest-owner', { coupleId: 'latest' })
+  await assert.rejects(() => api.joinPartnerInvite('guest', { inviteToken: 'old' }), /失效/)
+  await assert.rejects(() => api.joinPartnerInvite('guest', { inviteToken: firstInvite.token }), /失效/)
+  await api.joinPartnerInvite('guest', { inviteToken: secondInvite.token })
+  assert.equal(documents.couples.latest.memberB.openid, 'guest')
+  documents.couples.invited = { _id: 'invited', memberA: { openid: 'owner' }, memberB: null }
+  documents.space_invites = {
+    invite: { _id: 'invite', coupleId: 'invited', tokenHash: hash('token'), status: 'active' },
+  }
+  await assert.rejects(() => api.joinPartnerInvite('owner', { inviteToken: 'token' }), /不能加入自己/)
+  await assert.rejects(() => api.joinPartnerInvite('a', { inviteToken: 'token' }), /已加入/)
+  assert.equal(documents.space_invites.invite.status, 'active')
+  await api.joinPartnerInvite('partner', { inviteToken: 'token' })
+  await api.joinPartnerInvite('partner', { inviteToken: 'token' })
+  assert.equal(documents.couples.invited.memberB.openid, 'partner')
+  assert.equal(documents.space_memberships[hash('partner').slice(0, 32)].coupleId, 'invited')
+
+  documents.access_codes = { code: { _id: 'code', codeHash: hash('ABCD1234'), status: 'unused' } }
+  const activated = await api.redeemAccessCode('new-owner', { code: 'ABCD1234', startDate: '2026-01-01' })
+  assert.equal(documents.access_codes.code.coupleId, activated.id)
+  assert.equal(documents.space_memberships[hash('new-owner').slice(0, 32)].coupleId, activated.id)
+  await assert.rejects(() => api.seedDemoData('a', { coupleId: 'space', envVersion: 'trial' }), /未启用/)
+
+  for (let i = 0; i < 102; i++) {
+    const _id = String(i).padStart(3, '0')
+    documents.moments[_id] = {
+      _id, coupleId: 'space', kind: 'post', momentDate: '2026-10-13', createdAt: 1,
+      images: i <= 1 ? [image] : [],
+    }
+  }
+  const pageOptions = { coupleId: 'space', mediaFilter: 'image', limit: 1 }
+  const pageOne = await api.queryMomentsPage('a', pageOptions, false)
+  const pageTwo = await api.queryMomentsPage('a', { ...pageOptions, skip: 1 }, false)
+  assert.equal((await api.rebuildUsage('space')).storageBytes, 200, 'Shared files are charged per record during legacy usage rebuild')
+  assert.equal(pageOne.items[0].id, '001')
+  assert.equal(pageOne.total, 2)
+  assert.equal(pageOne.hasMore, true)
+  assert.equal(pageTwo.items[0].id, '000')
+  assert.equal(pageTwo.hasMore, false)
+  const neighbors = await api.getMomentNeighbors('a', { coupleId: 'space', momentId: '100' })
+  assert.deepEqual(clone(neighbors), { prevId: '101', nextId: '099', index: 2, total: 102 })
+  for (let i = 0; i < 205; i++) {
+    const _id = `comment-${String(i).padStart(3, '0')}`
+    documents.moment_comments[_id] = { _id, coupleId: 'space', momentId: '001', authorRole: 'a', createdAt: 205 - i }
+  }
+  const comments = await api.listComments('a', { coupleId: 'space', momentId: '001' })
+  assert.equal(comments.length, 205)
+  assert.equal(comments[0].id, 'comment-204')
+  const enriched = await api.queryMomentsPage('a', pageOptions, false)
+  assert.equal(enriched.items[0].commentCount, 205)
+  await assert.rejects(() => api.addComment('a', { coupleId: 'space', momentId: '001', content: ' ' }), /填写/)
+  await api.deleteComment('a', { coupleId: 'space', commentId: 'already-deleted' })
+  await api.deleteAnniversary('a', { coupleId: 'space', anniversaryId: 'already-deleted' })
+  documents.moments['001'].location = { name: '__proto__', address: 'Shanghai', latitude: '31.1234', longitude: '121.1234' }
+  documents.moments['002'].location = { name: 'bad', latitude: 31 }
+  const places = await api.listMapPlaces('a', { coupleId: 'space' })
+  assert.equal(places.places.length, 1)
+  assert.equal(places.places[0].latitude, 31.1234)
+  const collections = await api.listMomentCollections('a', { coupleId: 'space' })
+  assert.equal(collections.places.find(place => place.name === '__proto__').count, 1)
+  console.log('PASS: invite ownership, activation, server-only demo gate, filtered pages and tied neighbor order')
+  console.log('PASS: calendar boundaries, media ownership, cleanup failures, empty input, comment pagination and idempotent deletion')
 }
 
 async function verifyDraft(directory) {
   const storage = new Map()
+  let copies = 0
   const original = path.join(directory, 'photo.jpg')
   fs.writeFileSync(original, Buffer.from([1, 2, 3, 4]))
   const context = loadTS('miniprogram/services/compose-draft.ts', {
@@ -142,7 +494,10 @@ async function verifyDraft(directory) {
     removeStorageSync: key => storage.delete(key),
     getFileSystemManager: () => ({
       mkdirSync: (name, recursive) => fs.mkdirSync(name, { recursive }),
-      copyFile: ({ srcPath, destPath, success, fail }) => fs.copyFile(srcPath, destPath, error => error ? fail(error) : success()),
+      copyFile: ({ srcPath, destPath, success, fail }) => {
+        copies++
+        fs.copyFile(srcPath, destPath, error => error ? fail(error) : success())
+      },
       accessSync: name => fs.accessSync(name),
       rmdirSync: name => fs.rmSync(name, { recursive: true, force: true }),
     }),
@@ -162,6 +517,7 @@ async function verifyDraft(directory) {
   assert.equal(restored.video, restored.images[0])
   assert.equal(restored.voice.path, restored.images[0])
   assert.equal(restored.livePhotos[0].video, restored.images[0])
+  assert.equal(copies, 1, 'The same file referenced by multiple media fields is copied only once')
   assert(fs.readFileSync(restored.images[0]).equals(fs.readFileSync(original)))
   api.clearComposeDraft('draft_request')
   assert(fs.existsSync(original), 'Clearing a draft must only remove its own copies')
@@ -193,6 +549,14 @@ async function verifyClient() {
   assert.equal(page.data.fabLeft, 150)
   assert.equal(page.data.fabTop, 350)
   assert(context)
+  const dstCheck = `
+    const fs = require('node:fs'), vm = require('node:vm'), ts = require('typescript');
+    const source = fs.readFileSync('miniprogram/services/date.ts', 'utf8');
+    const ctx = {exports: {}, Date, Math}; vm.createContext(ctx);
+    vm.runInContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,ctx);
+    if (ctx.exports.daysBetween('2024-03-09', new Date(2024,2,11)) !== 3) process.exit(1);
+  `
+  execFileSync(process.execPath, ['-e', dstCheck], { cwd: root, env: { ...process.env, TZ: 'America/New_York' } })
   console.log('PASS: write retry policy and live + drag coordinates')
 }
 
@@ -225,6 +589,18 @@ async function verifyFeedRace() {
   await oldRequest
   assert.equal(page.data.rows[0].key, 'travel-memory')
   assert.equal(page.data.loading, false)
+  page.data.hasMore = true
+  page.data.filterTag = 'daily'
+  const staleMore = page.loadMore()
+  page.data.filterTag = 'travel'
+  const freshFeed = page.refresh()
+  await new Promise(resolve => setImmediate(resolve))
+  pending.get('travel')({ items: [{ id: 'latest' }], total: 1, hasMore: false })
+  await freshFeed
+  pending.get('daily')({ items: [{ id: 'obsolete' }], total: 1, hasMore: false })
+  await staleMore
+  assert.equal(page.data.rows[0].key, 'latest')
+  assert.equal(page.data.loadingMore, false, 'Changing the filter must release the previous loading-more state')
 
   const timing = loadTS('miniprogram/utils/moment-time.ts', {
     '../services/date': { todayKey: () => '2026-10-13' },
@@ -244,6 +620,217 @@ async function verifyFeedRace() {
   assert.equal(timing.momentDateOf({ momentDate: '2026-10-13', createdAt: 1 }), '2026-10-13')
   assert.equal(new Date(timing.momentDisplayAt(record('first'))).getDate(), 13)
   console.log('PASS: rapid filter switching ignores stale results; pagination avoids repeated month headings; B identity and display dates stay correct')
+}
+
+async function verifyUploadCancellation() {
+  const pool = loadTS('miniprogram/utils/async-pool.ts').exports
+  let task, abortCount = 0, progress = 0, completeImmediately = false
+  const cloud = {
+    uploadFile(options) {
+      task = {
+        abort() { abortCount++; options.fail(new Error('upload cancelled')) },
+        onProgressUpdate(callback) { this.progress = callback },
+      }
+      if (completeImmediately) setImmediate(() => options.success({ fileID: 'cloud://test.bucket/moments/space/images/new.jpg' }))
+      return task
+    },
+  }
+  const api = loadTS('miniprogram/services/store.ts', {
+    './cloud-api': { callOurs: async action => action === 'getPublishedMoment' ? null : {} },
+    '../utils/async-pool': pool,
+    './session': { coupleId: () => 'space' },
+  }, { wx: { cloud, getFileSystemManager: () => ({ getFileInfo: options => options.success({ size: 10 }) }) } }).exports
+  const publish = api.addMoment({ content: 'memory', images: ['local.jpg'], location: null, requestId: 'request_upload' },
+    value => { progress = Math.max(progress, value) })
+  await new Promise(resolve => setImmediate(resolve))
+  assert(task && typeof task.progress === 'function')
+  task.progress({ progress: 50 })
+  assert(progress > 0)
+  api.cancelMomentUpload()
+  await assert.rejects(() => publish, /取消上传/)
+  assert.equal(abortCount, 1)
+  completeImmediately = true
+  const result = await api.uploadMomentImages(['later.jpg'])
+  assert.equal(result.length, 1, 'A cancelled publication must not poison later uploads')
+  console.log('PASS: actual upload task receives progress, aborts on cancellation, and later uploads work')
+}
+
+async function verifyRecording() {
+  let definition, onStart, onStop, onError, startCount = 0, registrations = 0
+  const recorder = {
+    onStart(fn) { onStart = fn },
+    onStop(fn) { registrations++; onStop = fn },
+    onError(fn) { onError = fn },
+    start() { startCount++ },
+    stop() {},
+  }
+  let allowed = false
+  const wx = {
+    getRecorderManager: () => recorder,
+    getSystemInfoSync: () => ({ platform: 'ios' }),
+    authorize(options) { allowed ? options.success() : options.fail({ errMsg: 'auth denied' }) },
+    showModal(options) { options.success({ confirm: true }) },
+    openSetting(options) { allowed = true; options.success({ authSetting: { 'scope.record': true } }) },
+    showToast() {},
+  }
+  loadTS('miniprogram/pages/compose/compose.ts', {
+    '../../services/theme': { getThemeStyle: () => '', syncTheme() {} },
+    '../../services/store': { getIdentity: () => ({ role: 'A' }), getCouple: () => ({ startDate: '2020-01-01' }) },
+    '../../services/page-boot': { ensureCloudReady: async () => true },
+    '../../app': { getAppInstance: () => ({ waitBoot: async () => {} }) },
+    '../../services/date': { todayKey: () => '2026-01-01' },
+    '../../utils/moment-time': { formatMomentDateLabel: () => '今天' },
+    '../../services/compose-draft': { newPublishId: () => 'draft123', readComposeDraft: () => null },
+    '../../utils/tags': { MOMENT_TAG_POST: [] },
+  }, { Page: value => { definition = value }, wx, setInterval, clearInterval })
+  const makePage = () => ({
+    ...definition,
+    data: { ...definition.data },
+    setData(patch) { Object.assign(this.data, patch) },
+    scheduleDraftSave() {},
+  })
+  const page = makePage()
+  await page.onLoad({})
+  page.data.voice = { path: 'old.mp3', duration: 2 }
+  page.startRecord()
+  assert.equal(startCount, 1, 'Granting permission in settings resumes recording')
+  assert.equal(page.data.recording, false)
+  onStart()
+  assert.equal(page.data.recording, true)
+  onError({ errMsg: 'microphone unavailable' })
+  assert.equal(page.data.voice.path, 'old.mp3', 'A failed re-record must not delete the old voice')
+  page.startRecord()
+  onStart()
+  page.recordStartedAt = Date.now() - 2000
+  onStop({ tempFilePath: 'new.mp3' })
+  assert.equal(page.data.voice.path, 'new.mp3')
+  assert.equal(page.data.voice.duration, 2)
+  const nextPage = makePage()
+  await nextPage.onLoad({})
+  assert.equal(registrations, 1, 'Recorder listeners must not accumulate across compose pages')
+  console.log('PASS: microphone permissions, confirmed recording start, failure recovery and recorder listener lifecycle')
+}
+
+async function verifyVoicePlayback() {
+  let definition, invalidateCount = 0, toastCount = 0
+  let lookup = async () => 'https://example.invalid/voice.mp3'
+  const players = []
+  const wx = {
+    cloud: { downloadFile: async () => ({ tempFilePath: 'wxfile://voice.mp3' }) },
+    showToast() { toastCount++ },
+    createInnerAudioContext() {
+      const player = {
+        play() {}, destroy() {},
+        onPlay(fn) { this.started = fn },
+        onEnded(fn) { this.ended = fn },
+        onError(fn) { this.failed = fn },
+      }
+      players.push(player)
+      return player
+    },
+  }
+  loadTS('miniprogram/pages/moment-detail/moment-detail.ts', {
+    '../../services/theme': { getThemeStyle: () => '' },
+    '../../services/store': { resolveCloudUrl: () => lookup() },
+    '../../utils/cloud-url-cache': { invalidateCachedUrl: () => { invalidateCount++ } },
+  }, { Page: value => { definition = value }, wx })
+  const page = {
+    ...definition, data: { ...definition.data, loading: false, item: { voiceFileID: 'cloud://bucket/voice.mp3' } },
+    setData(patch) {
+      for (const [key, value] of Object.entries(patch)) {
+        if (key.startsWith('item.')) this.data.item[key.slice(5)] = value
+        else this.data[key] = value
+      }
+    },
+  }
+  await page.onTapVoice()
+  assert.equal(page.data.item.voiceLoading, true)
+  players[0].failed()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(invalidateCount, 1)
+  assert.equal(players[1].src, 'wxfile://voice.mp3')
+  players[1].started()
+  assert.equal(page.data.item.voicePlaying, true)
+  players[1].failed()
+  assert.equal(page.data.item.voicePlaying, false)
+  assert.equal(toastCount, 1)
+  let resolveLookup
+  lookup = () => new Promise(resolve => { resolveLookup = resolve })
+  const pending = page.onTapVoice()
+  page.onHide()
+  resolveLookup('https://example.invalid/late.mp3')
+  await pending
+  assert.equal(players.length, 2, 'A hidden page must not start delayed audio playback')
+  console.log('PASS: voice playback falls back, clears stale URLs, reports errors and cancels on hide')
+}
+
+async function verifyAdminSafety() {
+  const sdk = require(path.join(root, 'cloudfunctions/admin-api/node_modules/@cloudbase/node-sdk'))
+  const realApp = sdk.init({ env: sdk.SYMBOL_CURRENT_ENV })
+  assert.equal(typeof realApp.auth().getUserInfo, 'function')
+  assert.equal(typeof realApp.getTempFileURL, 'function')
+  assert.equal(typeof realApp.deleteFile, 'function')
+  assert.equal(typeof realApp.database().collection, 'function')
+  let deleted = [], space = { status: 'revoked', deletedAt: 1 }, failWrite = false
+  const db = { collection: () => ({ doc: id => ({
+    async get() { return { data: id === 'missing' ? [] : [space] } },
+    async update(value) {
+      if (failWrite) return { code: 'PERMISSION_DENIED', message: 'write denied' }
+      Object.assign(space, value)
+      return { updated: 1 }
+    },
+  }) }) }
+  const app = {
+    database: () => db,
+    async deleteFile({ fileList }) {
+      deleted.push(...fileList)
+      return { fileList: [{ fileID: fileList[0], code: 'SUCCESS' }] }
+    },
+  }
+  const context = vm.createContext({
+    exports: {}, console, Date,
+    require: id => id === '@cloudbase/node-sdk' ? { init: () => app } : require(id),
+  })
+  vm.runInContext(fs.readFileSync(path.join(root, 'cloudfunctions/admin-api/index.js'), 'utf8') + `
+    globalThis.api = { readDocument, getSpaceDetail, resumeSpace, deleteSpace, collectSpaceFileIDs, deleteCloudFiles };
+  `, context)
+  const api = context.api
+  assert.equal((await api.readDocument('couples', 'space')).status, 'revoked')
+  assert.equal((await api.readDocument('couples', 'space'))._id, 'space')
+  assert.equal(await api.readDocument('couples', 'missing'), null)
+  await assert.rejects(() => api.resumeSpace({ coupleId: 'space' }), /无法恢复/)
+  space = { status: 'active', usageVersion: 2, usage: { momentCount: 3 }, startDate: '2020-01-01' }
+  const detail = await api.getSpaceDetail({ coupleId: 'space' })
+  assert.equal(detail.space.usage.momentCount, 3)
+  assert.equal(detail.space.startDate, '2020-01-01')
+  failWrite = true
+  await assert.rejects(() => api.deleteSpace({ coupleId: 'space' }), /write denied/)
+  assert.equal(space.status, 'active', 'Do not delete records after the pause write fails')
+  assert.equal(deleted.length, 0)
+  failWrite = false
+  const owned = 'cloud://bucket/moments/space/images/1.jpg'
+  const other = 'cloud://bucket/moments/other/moments/space/file.jpg'
+  const files = api.collectSpaceFileIDs('space', { pendingDeleteFiles: [owned, other] }, [], [])
+  assert.deepEqual(clone(files), [owned])
+  const result = await api.deleteCloudFiles([owned, 'cloud://bucket/moments/space/images/2.jpg'])
+  assert.equal(result.failed, 1, 'Missing per-file delete results must be retried')
+  assert.equal(deleted.length, 2)
+  const codes = Array.from({ length: 5 }, (_, i) => ({ _id: String(i), createdAt: i, status: 'unused' }))
+  const fallbackDb = { collection: () => ({
+    orderBy() { throw new Error('index unavailable') },
+    async count() { return { total: codes.length } },
+  }) }
+  const fallbackContext = vm.createContext({
+    exports: {}, console, Date, fixtures: codes,
+    require: id => id === '@cloudbase/node-sdk' ? { init: () => ({ database: () => fallbackDb }) } : require(id),
+  })
+  vm.runInContext(fs.readFileSync(path.join(root, 'cloudfunctions/admin-api/index.js'), 'utf8') + `
+    getAllCollectionDocs = async () => fixtures.slice();
+    globalThis.listAccessCodes = listAccessCodes;
+  `, fallbackContext)
+  const fallbackPage = await fallbackContext.listAccessCodes({ skip: 1, limit: 2 })
+  assert.deepEqual(clone(fallbackPage.items.map(item => item.id)), ['3', '2'])
+  console.log('PASS: partial space deletion cannot be resumed; file ownership and incomplete delete results are guarded')
 }
 
 async function verifyBackup(directory) {
@@ -280,6 +867,10 @@ async function main() {
     await verifyBackup(directory)
     await verifyClient()
     await verifyFeedRace()
+    await verifyUploadCancellation()
+    await verifyRecording()
+    await verifyVoicePlayback()
+    await verifyAdminSafety()
   } finally { fs.rmSync(directory, { recursive: true, force: true }) }
 }
 

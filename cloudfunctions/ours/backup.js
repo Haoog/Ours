@@ -1,15 +1,15 @@
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const archiver = require('archiver')
 const crypto = require('crypto')
 
 async function zipBackupPart(cloud, snapshot, part, mediaFiles) {
+  const { ZipArchive } = await import('archiver')
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ours-backup-'))
   const archivePath = path.join(directory, 'backup.zip')
   const missing = []
   const output = fs.createWriteStream(archivePath)
-  const archive = archiver('zip', { store: true })
+  const archive = new ZipArchive({ store: true })
   const closed = new Promise((resolve, reject) => {
     output.once('close', resolve)
     output.once('error', reject)

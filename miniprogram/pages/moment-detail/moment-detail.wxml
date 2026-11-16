@@ -29,7 +29,7 @@
 
   <view wx:if="{{item.voiceFileID}}" class="voice-play card-soft" bindtap="onTapVoice">
     <text class="voice-play__icon">{{item.voicePlaying ? '⏸' : '▶'}}</text>
-    <text class="voice-play__text">语音 · {{item.voiceDuration}} 秒</text>
+    <text class="voice-play__text">{{item.voiceLoading ? '语音加载中…' : '语音 · ' + item.voiceDuration + ' 秒'}}</text>
   </view>
 
   <view wx:if="{{item.imgCount > 0}}" class="gallery">

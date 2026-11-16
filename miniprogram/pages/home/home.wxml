@@ -34,6 +34,7 @@
       <view class="recent__more" bindtap="onTapMoments">全部回忆 →</view>
     </view>
 
+    <view wx:if="{{recentError}}" class="recent__error" bindtap="onRetryRecent">{{recentLoaded ? '更新失败，显示上次记录' : '加载失败'}}：{{recentError}} · 点击重试</view>
     <scroll-view wx:if="{{hasRecent}}" class="recent__scroller" scroll-x enhanced show-scrollbar="{{false}}">
       <view class="recent__track">
         <view class="recent-card" wx:for="{{recent}}" wx:key="id" data-id="{{item.id}}" hover-class="u-press" bindtap="onTapMoment">
@@ -58,7 +59,7 @@
       </view>
     </scroll-view>
 
-    <view wx:elif="{{!recentLoaded}}" class="recent__skeleton">
+    <view wx:elif="{{!recentLoaded && !recentError}}" class="recent__skeleton">
       <view class="rsk-row" wx:for="{{[1,2,3]}}" wx:key="*this">
         <view class="rsk-thumb"></view>
         <view class="rsk-meta">
@@ -68,7 +69,7 @@
       </view>
     </view>
 
-    <view wx:else class="empty-stage">
+    <view wx:elif="{{recentLoaded}}" class="empty-stage">
       <text class="key">还没有记录</text>
       <text>写下属于你们的第一段日常</text>
     </view>

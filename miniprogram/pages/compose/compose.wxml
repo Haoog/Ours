@@ -33,7 +33,7 @@
     </view>
     <view class="media-bar__btn {{recording ? 'is-recording' : ''}}" bindtap="onToggleRecord">
       <text class="media-bar__icon">🎙</text>
-      <text>{{recording ? recordSec + 's' : '语音'}}</text>
+      <text>{{recordPending ? '请稍候…' : recording ? recordSec + 's' : '语音'}}</text>
     </view>
   </view>
   <text class="media-hint" wx:if="{{!editing}}">还可添加 {{mediaRemaining}} 个媒体文件</text>
@@ -76,7 +76,7 @@
   </view>
 
   <view class="voice-box card-soft" wx:if="{{voice}}">
-    <view class="voice-box__wave">〰</view>
+    <view class="voice-box__wave" bindtap="onToggleVoicePreview">{{voiceLoading ? '加载中…' : voicePlaying ? '暂停' : '试听'}}</view>
     <text class="voice-box__dur">{{voice.duration}} 秒语音</text>
     <view wx:if="{{!editing && !pendingResult}}" class="voice-box__remove" bindtap="onRemoveVoice">删除</view>
   </view>

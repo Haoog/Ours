@@ -18,9 +18,10 @@
 | `moment_likes` | 动态爱心（v0.2） |
 | `access_codes` | 管理台生成的一次性授权码 |
 | `space_invites` | 双人空间第二位成员的一次性邀请 token |
+| `space_memberships` | 账号绑定记录，防止同一微信账号并发绑定多个空间 |
 | `admins` | 管理台管理员白名单（仅云函数读写） |
 
-`access_codes`、`space_invites`、`admins` 建议设置为「仅云函数可读写」。邀请码只保存哈希，网页管理台不会从数据库恢复原始邀请码；生成后请立即复制并发给客户。网页会在当前管理台会话中保留最近一次生成结果，关闭提示后不再显示原始码。
+`access_codes`、`space_invites`、`space_memberships`、`admins` 建议设置为「仅云函数可读写」。邀请码只保存哈希，网页管理台不会从数据库恢复原始邀请码；生成后请立即复制并发给客户。网页会在当前管理台会话中保留最近一次生成结果，关闭提示后不再显示原始码。
 
 ### 建议索引（重要：消除全表扫描）
 
@@ -33,6 +34,7 @@
 | `couples` | `memberA.openid`(单字段) | 登录态查找本人空间 |
 | `couples` | `memberB.openid`(单字段) | 同上（对方） |
 | `moments` | `coupleId`↑ + `sortAt`↓ | 时间轴分页、那年今日、合辑、地图、相邻导航 |
+| `moments` | `coupleId`↑ + `_id`↑ | 历史记录迁移、地图、备份和清理的稳定分页 |
 | `moments` | `coupleId`↑ + `tag`↑ + `sortAt`↓ | 标签筛选分页 |
 | `moments` | `coupleId`↑ + `kind`↑ | `getMomentsBriefStats` 计数、系统卡判定 |
 | `moments` | `coupleId`↑ + `authorRole`↑ | A/B 发布数计数 |
@@ -40,26 +42,35 @@
 | `moments` | `coupleId`↑ + `kind`↑ + `tag`↑ + `momentDate`↓ + `createdAt`↓ + `_id`↓ | 标签筛选 |
 | `moments` | `coupleId`↑ + `kind`↑ + `location.name`↑ + `momentDate`↓ + `createdAt`↓ + `_id`↓ | 地点合辑筛选 |
 | `checkins` | `coupleId`↑ + `date`↑ | 当日签到、月历区间查询 |
+| `checkins` | `coupleId`↑ + `date`↑ + `_id`↑ | 月历和备份的稳定分页（以控制台提示为准） |
 | `checkins` | `coupleId`↑ + `date`↑ + `openid`↑ | 判断本人当日是否已签 |
 | `moment_comments` | `coupleId`↑ + `momentId`↑ + `createdAt`↑ | 评论列表、批量计数（`momentId in [...]`） |
+| `moment_comments` | `coupleId`↑ + `momentId`↑ + `_id`↑ | 评论和列表计数的稳定分页 |
 | `moment_likes` | `coupleId`↑ + `momentId`↑ | 爱心数、批量聚合 |
+| `moment_likes` | `coupleId`↑ + `momentId`↑ + `_id`↑ | 列表爱心的稳定分页 |
 | `moment_likes` | `coupleId`↑ + `momentId`↑ + `openid`↑ | 判断本人是否已赞 |
 | `anniversaries` | `coupleId`↑ + `date`↑ | 纪念日列表（按日期升序） |
+| `anniversaries` | `coupleId`↑ + `_id`↑ | 纪念日稳定分页 |
 | `rants` | `coupleId`↑ + `createdAt`↓ | 吐槽墙列表（未建索引时云函数内存兜底排序） |
 | `notes` | `coupleId`↑ + `createdAt`↓ | 小纸条列表 |
 | `access_codes` | `createdAt`↓、`codeHash`（单字段） | 管理台列表、兑换邀请码 |
 | `space_invites` | `tokenHash`（单字段）、`coupleId`↑ | 第二位成员兑换邀请链接 |
+| `space_memberships` | `coupleId`↑ | 删除空间时清理账号绑定 |
 | `admins` | `uid`（单字段）、`openid`（单字段） | 管理台身份校验 |
+
+备份和清理也会按 `coupleId`、`_id` 读取 `rants`、`notes`、`moment_comments`、`moment_likes`、`checkins`；如果云开发控制台提示缺少索引，为对应集合补充 `coupleId`↑ + `_id`↑。不同云数据库版本的索引要求可能有差异，以实际报错提示为准。
 
 > 说明：`getOnThisDay`/`getMomentsStats`/`listMomentCollections`/`listMapPlaces` 需对「本空间全部动态」做聚合，属设计内的有界扫描——建好上面的 `coupleId+sortAt` 索引后即为按空间的范围扫描，单空间数据量小（百量级），无需额外预计算字段。若未来单空间动态量很大，再考虑增加 `monthDay` 等冗余字段做月日检索。
 
 ## 2. 部署云函数
 
+升级前先创建 `space_memberships` 集合及其索引，设为仅云函数可读写；已存在的空间无需手工回填。请同时更新两个云函数，让新建、加入和删除空间使用同一套绑定规则。
+
 1. 微信开发者工具 → 右键 `cloudfunctions/ours` → **上传并部署：云端安装依赖**
 2. 首次需在该目录执行 `npm install`（工具可自动安装）
 3. 右键 `cloudfunctions/admin-api` → **上传并部署：云端安装依赖**。这个函数只接受已登录且存在于 `admins` 集合的网页账号；若管理台需要统计历史媒体文件大小，建议将该函数的执行超时设为至少 15 秒。
 
-2026-10-13 更新：先部署 `ours` 与 `admin-api`，再发布新版小程序。`ours` 使用 Node.js 18 或以上，建议 512 MB 内存、120 秒超时，以支持媒体备份分卷。部署时需云端安装新增的 `archiver` 依赖。
+2026-10-13 更新：先部署 `ours` 与 `admin-api`，再发布新版小程序。`ours` 使用 Node.js 18 或以上，建议 512 MB 内存、120 秒超时，以支持媒体备份分卷；上线前须在实际云函数部署配置中设置并核实超时不超过 600 秒。本仓库没有经验证可强制该设置的部署配置；离线测试无法验证云端实际超时和超时后的终止行为，上线后还须检查云端配置并验证超时强制终止。空间操作租约和备份清理宽限均为 15 分钟，依赖云函数在超时后停止执行以及各实例时钟基本同步。部署时需云端安装新增的 `archiver` 依赖。
 
 新版列表按回忆日期、完整发布时间和文档 ID 排序。旧记录缺少回忆日期时会在首次查询中补齐；请建立上表的新索引。地点坐标筛选同时使用 `location.latitude` / `location.longitude` 范围条件，应根据云控制台提示补充对应复合索引。
 
@@ -93,7 +104,7 @@ npm run dev
 - 客户兑换后，邀请码中的额度会复制到对应 `couples.quota`；小程序发布动态、上传媒体时持续校验动态数、媒体数、单条媒体数和存储字节数。
 - 客户首次打开小程序时只能看到「邀请码激活」页；没有有效邀请码不能创建空间，也不会自动加入别人的空间。
 - 客户兑换邀请码后创建 `memberA` 空间；进入「我们」页生成第二位成员专属邀请链接。
-- 第二位成员只能通过该邀请链接加入，一个空间最多两人，邀请链接默认 7 天有效。
+- 第二位成员只能通过该邀请链接加入，一个空间最多两人，邀请链接默认 7 天有效。兼容历史数据：空间首次生成新版邀请链接之前，多个尚未失效的旧链接可能同时可用；首次生成新版链接后，仅最新链接可用。
 - 管理员在网页「双人空间」里可以看到成员、授权额度、资源用量，以及该空间的全部动态和媒体。
 - 网页可删除未兑换、已撤销或已过期且未绑定空间的邀请码；也可在二次确认后删除整个空间及其记录、媒体和授权记录。
 - 管理台的动态、媒体和存储统计按对应空间的实际记录汇总，兼容早期空间中 `couples.usage` 未回填的情况；修改 `admin-api` 后需重新上传并部署该云函数。
@@ -104,7 +115,7 @@ npm run dev
 
 - `moments/{coupleId}/images/*` — 照片（额度由邀请码决定，可多次添加）
 - `moments/{coupleId}/videos/*` — 视频或实况配对视频（实况封面在 images）
-- `moments/{coupleId}/voices/*` — 语音（每条最多 1 条，最长 60 秒）
+- `moments/{coupleId}/voices/*` — 语音（每条最多 1 条，最长 600 秒）
 
 动态发布成功后会登记动态数量、媒体文件数量和云函数核验的媒体实际大小；删除动态会回收对应额度。客户端传入的 `mediaBytes` 不作为限额依据，吐槽墙图片也走同一套服务端核验。旧空间在首次写入时会先按已有记录重建用量，避免历史 `usage` 缺失导致绕过上限。修改云函数后请重新**上传并部署** `ours`（`config.json` 已声明 `security.msgSecCheck` 权限，用于文本内容安全）。
 
@@ -116,9 +127,11 @@ npm run dev
 - 2026-10-13 已移除宠物养成、浮窗及成长奖励，旧 `couples.pet` 字段保留但不再读写；重新部署 `ours` 后生效。
 - `listCheckins` 按 `year` + `month` 查询当月签到
 - `deleteMoment` / `cleanupUploadedFiles` 会尝试删除关联的云存储 `fileID`
-- `seedDemoData`：仅开发版/体验版，追加 v0.1+v0.2 全套演示，不会清理已有动态或媒体（见产品文档 §16、§17）
+- `seedDemoData` 默认关闭。仅在独立测试云环境为 `ours` 设置环境变量 `OURS_ENABLE_DEMO_SEED=1` 后才允许追加演示记录；正式环境保持关闭。
 - 发布使用固定 `requestId`；`getPublishedMoment` 可确认结果，重试不会重复扣除额度。
 - `updateMoment` 支持作者修改文字、日期、标签和地点；`setMomentLike` 写入目标点赞状态，网络重试不会再次翻转。
 - 删除先提交记录及额度变更，再清理媒体；失败任务留在 `couples.mediaCleanup`，后续启动或删除时重试。上传失败的候选文件延迟一小时检查引用后清理。
 - 「我们 → 备份回忆」使用 `startBackup` / `exportBackupPart` 导出记录及原媒体 ZIP，每包最多 10 个媒体。包内 `backup-status.json` 列出未导出的文件；中间云备份文件一天后进入清理队列，本机已下载的包不受影响。
+- 快照或 ZIP 上传后登记失败时，服务端会核查登记状态并尽力删除未登记文件；上传后进程崩溃、状态无法确认或删除失败仍可能遗留孤儿文件，需按云存储运维策略检查清理。
+- **备份一致性限制：**新版 `ours` 通过空间文档事务协调普通操作、媒体清理和快照创建：已有操作结束后才能开始备份或清理，其执行期间其他操作会提示稍后重试；启动时若清理无法取得排他租约，会保留队列并继续启动。已登记快照保护引用的媒体至一天有效期结束后的 15 分钟；已有旧快照也适用宽限。清理无法读取快照时会延后。此机制依赖云数据库事务冲突检测和云函数超时强制终止，需在实际环境验证；失败的租约释放会在 15 分钟后过期。管理台 `admin-api`、旧版或尚未部署新版的云函数及其他直接数据库/文件操作不参与协调，仍可并发删除空间或媒体，不构成全局线性一致；部署期间及备份时请避免这些操作。请检查 ZIP 的缺失文件清单并保存下载结果。
 - v0.2 action：`listAnniversaries` `addAnniversary` `deleteAnniversary` `getNextAnniversary` `listRants` `addRant` `deleteRant` `listNotes` `sendNote` `markNoteRead` `listComments` `addComment` `deleteComment` `getMomentLikes` `toggleMomentLike` `listMapPlaces`

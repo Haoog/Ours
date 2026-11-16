@@ -126,7 +126,7 @@ function collectRantFileIDs(rant = {}) {
 }
 
 function countWithFallback(value, fallback) {
-  return Number.isFinite(Number(value)) ? nonNegativeInteger(value) : fallback
+  return value != null && Number.isFinite(Number(value)) ? nonNegativeInteger(value) : fallback
 }
 
 function bytesWithFallback(value) {
@@ -143,9 +143,10 @@ function requestContentLength(url, method = 'HEAD') {
       const contentRange = response.headers['content-range']
       const rangeMatch = typeof contentRange === 'string' ? contentRange.match(/\/(\d+)$/) : null
       const contentLength = Number(response.headers['content-length'])
-      const size = rangeMatch ? Number(rangeMatch[1]) : contentLength
-      response.resume()
-      response.once('end', () => resolve(Number.isFinite(size) && size >= 0 ? size : 0))
+      const status = Number(response.statusCode || 0)
+      const size = rangeMatch ? Number(rangeMatch[1]) : status === 206 ? NaN : contentLength
+      resolve(status >= 200 && status < 300 && Number.isFinite(size) && size >= 0 ? size : 0)
+      response.destroy()
     })
     request.once('timeout', () => request.destroy())
     request.once('error', () => resolve(0))
@@ -176,7 +177,7 @@ async function getStorageBytes(fileIDs) {
       if (!url) return
       const pending = getFileSize(url).catch(() => 0)
       mediaSizeCache.set(fileID, pending)
-      await pending
+      if (!(await pending)) mediaSizeCache.delete(fileID)
     }, 12)
   }
 
@@ -196,6 +197,7 @@ async function getCollectionDocs(collectionName, where, field) {
     let query = db.collection(collectionName).where(safeWhere)
     if (field) query = query.field(field)
     const result = await query.skip(skip).limit(USAGE_BATCH_SIZE).get()
+    if (result?.code) throw new Error(`${result.code}: ${result.message || result.errMsg || '读取失败'}`)
     documents.push(...result.data)
     if (result.data.length < USAGE_BATCH_SIZE) break
     skip += result.data.length
@@ -210,6 +212,7 @@ async function getAllCollectionDocs(collectionName) {
 
   while (true) {
     const result = await db.collection(collectionName).skip(skip).limit(USAGE_BATCH_SIZE).get()
+    if (result?.code) throw new Error(`${result.code}: ${result.message || result.errMsg || '读取失败'}`)
     documents.push(...result.data)
     if (result.data.length < USAGE_BATCH_SIZE) break
     skip += result.data.length
@@ -331,6 +334,19 @@ function documentId(doc) {
   return String(doc?._id || doc?.id || doc?.codeId || '').trim()
 }
 
+async function readDocument(collectionName, id) {
+  const result = await db.collection(collectionName).doc(id).get()
+  if (result?.code) throw new Error(result.message || result.errMsg || `读取${collectionName}失败`)
+  // The Node SDK returns an array outside transactions, and an object inside them.
+  const data = Array.isArray(result?.data) ? result.data[0] : result?.data
+  return data ? { ...data, _id: data._id || id } : null
+}
+
+function assertWriteSucceeded(result, label) {
+  if (!result || result.code) throw new Error(result?.message || result?.errMsg || `${label}失败`)
+  return result
+}
+
 function omitId(doc) {
   if (!doc) return null
   // CloudBase documents use _id, but keep compatibility with records returned
@@ -393,8 +409,9 @@ async function listAccessCodes(payload = {}) {
     const res = await db.collection('access_codes').orderBy('createdAt', 'desc').skip(skip).limit(limit).get()
     data = res.data
   } catch {
-    const res = await db.collection('access_codes').skip(skip).limit(limit).get()
-    data = res.data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    const all = await getAllCollectionDocs('access_codes')
+    all.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || documentId(b).localeCompare(documentId(a)))
+    data = all.slice(skip, skip + limit)
   }
   const total = (await db.collection('access_codes').count()).total || 0
   return { items: data.map(mapAccessCode), total, hasMore: skip + data.length < total }
@@ -416,7 +433,7 @@ async function createAccessCode(payload = {}) {
     createdAt: now,
   }
   // @cloudbase/node-sdk 的 add/update 参数是文档本身；只有 wx-server-sdk 才需要包一层 data。
-  const res = await db.collection('access_codes').add(data)
+  const res = assertWriteSucceeded(await db.collection('access_codes').add(data), '创建邀请码')
   return {
     id: res.id || res._id,
     code,
@@ -431,12 +448,11 @@ async function createAccessCode(payload = {}) {
 async function revokeAccessCode(payload = {}) {
   const id = String(payload.id || payload._id || payload.codeId || '').trim()
   if (!id) throw new Error('缺少邀请码 id')
-  const res = await db.collection('access_codes').doc(id).get()
-  const access = res.data
+  const access = await readDocument('access_codes', id)
   if (!access) throw new Error('邀请码不存在')
-  await db.collection('access_codes').doc(id).update({ status: 'revoked', revokedAt: Date.now() })
+  assertWriteSucceeded(await db.collection('access_codes').doc(id).update({ status: 'revoked', revokedAt: Date.now() }), '撤销邀请码')
   if (access.coupleId) {
-    await db.collection('couples').doc(access.coupleId).update({ status: 'suspended' })
+    assertWriteSucceeded(await db.collection('couples').doc(access.coupleId).update({ status: 'suspended' }), '暂停空间')
   }
   return { id, status: 'revoked', coupleId: access.coupleId || null }
 }
@@ -444,8 +460,7 @@ async function revokeAccessCode(payload = {}) {
 async function deleteAccessCode(payload = {}) {
   const id = String(payload.id || payload._id || payload.codeId || '').trim()
   if (!id) throw new Error('缺少邀请码 id')
-  const res = await db.collection('access_codes').doc(id).get()
-  const access = res.data
+  const access = await readDocument('access_codes', id)
   if (!access) throw new Error('邀请码不存在')
 
   // 已兑换的邀请码与空间绑定，不能只删授权记录，否则会留下失去授权来源的空间。
@@ -453,21 +468,24 @@ async function deleteAccessCode(payload = {}) {
     throw new Error('已激活的邀请码不能直接删除，请先处理对应空间')
   }
 
-  await db.collection('access_codes').doc(id).remove()
+  assertWriteSucceeded(await db.collection('access_codes').doc(id).remove(), '删除邀请码')
   return { id, deleted: true }
 }
 
 async function resumeSpace(payload = {}) {
   const coupleId = String(payload.coupleId || '').trim()
   if (!coupleId) throw new Error('缺少空间 id')
-  const res = await db.collection('couples').doc(coupleId).get()
-  if (!res.data) throw new Error('空间不存在')
-  if (res.data.expiresAt && Number(res.data.expiresAt) <= Date.now()) {
+  const space = await readDocument('couples', coupleId)
+  if (!space) throw new Error('空间不存在')
+  if (space.status === 'revoked' || space.deletedAt) {
+    throw new Error('空间正在删除，无法恢复')
+  }
+  if (space.expiresAt && Number(space.expiresAt) <= Date.now()) {
     throw new Error('空间授权已过期，请新建授权后再处理')
   }
-  await db.collection('couples').doc(coupleId).update({ status: 'active' })
-  if (res.data.licenseId) {
-    await db.collection('access_codes').doc(res.data.licenseId).update({ status: 'active' }).catch(() => undefined)
+  assertWriteSucceeded(await db.collection('couples').doc(coupleId).update({ status: 'active' }), '恢复空间')
+  if (space.licenseId) {
+    assertWriteSucceeded(await db.collection('access_codes').doc(space.licenseId).update({ status: 'active' }), '恢复授权')
   }
   return { coupleId, status: 'active' }
 }
@@ -484,8 +502,7 @@ async function verifySpaceQuota(coupleId, expectedQuota) {
   for (const delay of [0, 250, 750]) {
     if (delay) await new Promise(resolve => setTimeout(resolve, delay))
     try {
-      const verifyRes = await db.collection('couples').doc(coupleId).get()
-      latest = verifyRes.data || latest
+      latest = await readDocument('couples', coupleId) || latest
       if (latest && quotaMatches(normalizeQuota(latest.quota || {}), expectedQuota)) {
         return { document: latest, verified: true }
       }
@@ -501,8 +518,7 @@ async function updateSpaceQuota(payload = {}) {
   if (!coupleId) throw new Error('缺少空间 id')
 
   const input = payload.quota && typeof payload.quota === 'object' ? payload.quota : payload
-  const coupleRes = await db.collection('couples').doc(coupleId).get()
-  const couple = coupleRes.data
+  const couple = await readDocument('couples', coupleId)
   if (!couple) throw new Error('空间不存在')
 
   const nextInput = { ...normalizeQuota(couple.quota || {}) }
@@ -553,12 +569,12 @@ async function updateSpaceQuota(payload = {}) {
   const licenseId = String(couple.licenseId || verifiedDocument.licenseId || '').trim()
   if (licenseId) {
     try {
-      const licenseRes = await db.collection('access_codes').doc(licenseId).get()
-      if (licenseRes.data) {
-        await db.collection('access_codes').doc(licenseId).update({
+      const license = await readDocument('access_codes', licenseId)
+      if (license) {
+        assertWriteSucceeded(await db.collection('access_codes').doc(licenseId).update({
           quota,
           quotaUpdatedAt: verifiedDocument.quotaUpdatedAt || updatedAt,
-        })
+        }), '同步授权额度')
         licenseSynced = true
       }
     } catch (error) {
@@ -604,8 +620,9 @@ async function listSpaces(payload = {}) {
     const res = await db.collection('couples').orderBy('createdAt', 'desc').skip(skip).limit(limit).get()
     data = res.data
   } catch {
-    const res = await db.collection('couples').skip(skip).limit(limit).get()
-    data = res.data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    const all = await getAllCollectionDocs('couples')
+    all.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0) || documentId(b).localeCompare(documentId(a)))
+    data = all.slice(skip, skip + limit)
   }
   const total = (await db.collection('couples').count()).total || 0
   return { items: await hydrateSpaces(data), total, hasMore: skip + data.length < total }
@@ -614,15 +631,14 @@ async function listSpaces(payload = {}) {
 async function getSpaceDetail(payload = {}) {
   const coupleId = String(payload.coupleId || '').trim()
   if (!coupleId) throw new Error('缺少空间 id')
-  const res = await db.collection('couples').doc(coupleId).get()
-  if (!res.data) throw new Error('空间不存在')
+  const data = await readDocument('couples', coupleId)
+  if (!data) throw new Error('空间不存在')
   // @cloudbase/node-sdk 的 doc().get() 结果有时不带 _id；补回请求使用的
   // 文档 id，避免管理台进入详情或保存额度后丢失空间上下文。
-  const document = { ...res.data, _id: documentId(res.data) || coupleId }
+  const document = { ...data, _id: documentId(data) || coupleId }
   let license = null
   if (document.licenseId) {
-    const licenseRes = await db.collection('access_codes').doc(document.licenseId).get().catch(() => ({ data: null }))
-    license = omitId(licenseRes.data)
+    license = omitId(await readDocument('access_codes', document.licenseId).catch(() => null))
   }
   const usage = Number(document.usageVersion) === 2
     ? normalizeUsage(document.usage)
@@ -689,8 +705,9 @@ async function listMoments(payload = {}) {
   try {
     res = await query.orderBy('momentDate', 'desc').orderBy('createdAt', 'desc').orderBy('_id', 'desc').skip(skip).limit(limit).get()
   } catch {
-    res = await db.collection('moments').where({ coupleId }).skip(skip).limit(limit).get()
-    res.data.sort((a, b) => String(b.momentDate || '').localeCompare(String(a.momentDate || '')) || (b.createdAt || 0) - (a.createdAt || 0))
+    const all = await getCollectionDocs('moments', { coupleId })
+    all.sort((a, b) => String(b.momentDate || '').localeCompare(String(a.momentDate || '')) || (b.createdAt || 0) - (a.createdAt || 0) || documentId(b).localeCompare(documentId(a)))
+    res = { data: all.slice(skip, skip + limit) }
   }
   const total = (await db.collection('moments').where({ coupleId }).count()).total || 0
   const ids = [...new Set(res.data.flatMap(collectMediaIDs))]
@@ -736,6 +753,7 @@ const SPACE_CHILD_COLLECTIONS = [
   'moment_comments',
   'moment_likes',
   'space_invites',
+  'space_memberships',
 ]
 
 async function getOptionalCollectionDocs(collectionName, where) {
@@ -749,7 +767,7 @@ async function getOptionalCollectionDocs(collectionName, where) {
 
 async function removeDocuments(collectionName, documents) {
   for (const document of documents) {
-    if (document?._id) await db.collection(collectionName).doc(document._id).remove()
+    if (document?._id) assertWriteSucceeded(await db.collection(collectionName).doc(document._id).remove(), `删除${collectionName}记录`)
   }
 }
 
@@ -757,12 +775,10 @@ function collectSpaceFileIDs(coupleId, couple, moments, rants) {
   const ids = []
   const push = fileID => {
     if (typeof fileID !== 'string' || !fileID.startsWith('cloud://')) return
-    const allowed = [
-      `/moments/${coupleId}/`,
-      `/avatars/${coupleId}/`,
-      `/backups/${coupleId}/`,
-    ]
-    if (allowed.some(prefix => fileID.includes(prefix))) ids.push(fileID)
+    const allowed = [`moments/${coupleId}/`, `avatars/${coupleId}/`, `backups/${coupleId}/`]
+    const separator = fileID.indexOf('/', 'cloud://'.length)
+    const path = separator < 0 ? '' : fileID.slice(separator + 1)
+    if (allowed.some(prefix => path.startsWith(prefix)) && !path.split('/').some(part => part === '.' || part === '..')) ids.push(fileID)
   }
 
   for (const moment of moments) {
@@ -776,6 +792,7 @@ function collectSpaceFileIDs(coupleId, couple, moments, rants) {
   for (const task of Object.values(couple?.mediaCleanup || {})) {
     for (const fileID of task.fileIDs || []) push(fileID)
   }
+  for (const fileID of couple?.pendingDeleteFiles || []) push(fileID)
   return [...new Set(ids)]
 }
 
@@ -787,9 +804,8 @@ async function deleteCloudFiles(fileIDs) {
     const batch = uniqueIDs.slice(i, i + batchSize)
     try {
       const result = await app.deleteFile({ fileList: batch })
-      failed += (result.fileList || []).filter(item => (
-        item.code && item.code !== 'SUCCESS' && item.code !== 'STORAGE_FILE_NONEXIST'
-      )).length
+      const codes = new Map((result.fileList || []).map(item => [item.fileID, item.code]))
+      failed += batch.filter(id => !codes.has(id) || !['', undefined, 'SUCCESS', 'STORAGE_FILE_NONEXIST'].includes(codes.get(id))).length
     } catch (error) {
       failed += batch.length
       console.warn('delete space media failed', error?.message || error)
@@ -801,12 +817,11 @@ async function deleteCloudFiles(fileIDs) {
 async function deleteSpace(payload = {}) {
   const coupleId = String(payload.coupleId || '').trim()
   if (!coupleId) throw new Error('缺少空间 id')
-  const coupleRes = await db.collection('couples').doc(coupleId).get()
-  const couple = coupleRes.data
+  const couple = await readDocument('couples', coupleId)
   if (!couple) throw new Error('空间不存在')
 
   // 先暂停空间，避免删除过程中又有新的业务写入。
-  await db.collection('couples').doc(coupleId).update({ status: 'revoked', deletedAt: Date.now() })
+  assertWriteSucceeded(await db.collection('couples').doc(coupleId).update({ status: 'revoked', deletedAt: Date.now() }), '暂停空间')
 
   const records = {}
   for (const collectionName of SPACE_CHILD_COLLECTIONS) {
@@ -814,10 +829,8 @@ async function deleteSpace(payload = {}) {
   }
   const moments = records.moments || []
   const rants = records.rants || []
-  const fileIDs = [...new Set([
-    ...collectSpaceFileIDs(coupleId, couple, moments, rants), ...(couple.pendingDeleteFiles || []),
-  ])]
-  await db.collection('couples').doc(coupleId).update({ pendingDeleteFiles: fileIDs })
+  const fileIDs = collectSpaceFileIDs(coupleId, couple, moments, rants)
+  assertWriteSucceeded(await db.collection('couples').doc(coupleId).update({ pendingDeleteFiles: fileIDs }), '记录待清理文件')
 
   for (const collectionName of SPACE_CHILD_COLLECTIONS) {
     await removeDocuments(collectionName, records[collectionName] || [])
@@ -825,9 +838,9 @@ async function deleteSpace(payload = {}) {
 
   const linkedCodes = await getOptionalCollectionDocs('access_codes', { coupleId })
   if (couple.licenseId) {
-    const licenseRes = await db.collection('access_codes').doc(couple.licenseId).get().catch(() => ({ data: null }))
-    if (licenseRes.data && !linkedCodes.some(code => code._id === licenseRes.data._id)) {
-      linkedCodes.push(licenseRes.data)
+    const license = await readDocument('access_codes', couple.licenseId).catch(() => null)
+    if (license && !linkedCodes.some(code => code._id === license._id)) {
+      linkedCodes.push(license)
     }
   }
   await removeDocuments('access_codes', linkedCodes)
@@ -835,7 +848,7 @@ async function deleteSpace(payload = {}) {
   if (fileResult.failed) {
     throw new Error(`记录已删除，仍有 ${fileResult.failed} 个媒体文件待清理，请再次执行删除以重试`)
   }
-  await db.collection('couples').doc(coupleId).remove()
+  assertWriteSucceeded(await db.collection('couples').doc(coupleId).remove(), '删除空间')
   const deletedRecords = Object.values(records).reduce((total, list) => total + list.length, 0)
   return {
     coupleId,

@@ -14,12 +14,17 @@ Page({
     partnerHint: '',
     coupleId: '',
     inviteReady: false,
+    inviteLoading: false,
+    inviteError: '',
   },
 
   async onLoad() {
     syncTheme(this)
     await getAppInstance().waitBoot()
-    if (!(await ensureCloudReady())) return
+    if (!(await ensureCloudReady())) {
+      this.setData({ inviteError: '连接失败，请重试' })
+      return
+    }
     const c = getCouple()
     if (!c) return
     const { me, partner } = getRelationshipMembers()
@@ -30,20 +35,26 @@ Page({
       partnerHint: c.partnerWechatId ?? '',
       coupleId: c.id,
     })
-    if (!c.memberB) {
-      try {
-        await this.prepareInvite()
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '邀请链接生成失败'
-        wx.showToast({ title: msg, icon: 'none' })
-      }
-    }
+    if (!c.memberB) await this.prepareInvite()
   },
 
   async prepareInvite() {
-    const invite = await createPartnerInvite()
-    this.setData({ inviteReady: true })
-    this.inviteToken = invite.token
+    if (this.data.inviteLoading || this.data.inviteReady) return
+    this.setData({ inviteLoading: true, inviteError: '' })
+    try {
+      if (!(await ensureCloudReady())) throw new Error('连接失败，请重试')
+      const c = getCouple()
+      if (!c || c.memberB) throw new Error('空间不可邀请，请返回后重试')
+      const { me, partner } = getRelationshipMembers()
+      this.setData({ youName: me.nickname, themName: partner?.nickname ?? '她', startDate: c.startDate, partnerHint: c.partnerWechatId ?? '', coupleId: c.id })
+      const invite = await createPartnerInvite()
+      this.inviteToken = invite.token
+      this.setData({ inviteReady: true })
+    } catch (err) {
+      this.setData({ inviteError: err instanceof Error ? err.message : '邀请链接生成失败，请重试' })
+    } finally {
+      this.setData({ inviteLoading: false })
+    }
   },
 
   inviteToken: '',

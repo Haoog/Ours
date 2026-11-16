@@ -349,3 +349,5 @@
     background-position: 0 50%;
   }
 }
+
+.recent__error { padding: 20rpx 0; color: #a44551; font-size: 26rpx; line-height: 1.5; }

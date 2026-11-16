@@ -1,4 +1,9 @@
-import cloudbase from '@cloudbase/js-sdk'
+import cloudbase from '@cloudbase/js-sdk/app'
+import { registerAuth } from '@cloudbase/js-sdk/auth'
+import { registerFunctions } from '@cloudbase/js-sdk/functions'
+
+registerAuth(cloudbase)
+registerFunctions(cloudbase)
 
 const envId = import.meta.env.VITE_CLOUD_ENV_ID || 'cloud1-d1gg9j97ua5f7f700'
 

@@ -20,6 +20,8 @@
     </view>
   </view>
 
+  <view wx:if="{{inviteError}}" class="note" bindtap="prepareInvite">邀请链接生成失败：{{inviteError}} · 点击重试</view>
+  <text wx:if="{{inviteLoading}}" class="note">正在生成邀请链接…</text>
   <button open-type="share" class="share-btn" disabled="{{!inviteReady}}">分享给她</button>
   <text class="note">邀请链接有效期为 7 天，且只能连接一位成员</text>
 

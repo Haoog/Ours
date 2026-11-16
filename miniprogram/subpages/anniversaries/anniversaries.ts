@@ -46,9 +46,9 @@ Page({
         title: a.title,
         date: a.date,
         daysLeft: a.daysLeft ?? 0,
-        label: (a.daysLeft ?? 0) === 0 ? '就是今天' : `还有 ${a.daysLeft} 天`,
+        label: (a.daysLeft ?? 0) === 0 ? '就是今天' : (a.daysLeft ?? 0) < 0 ? `已过去 ${Math.abs(a.daysLeft ?? 0)} 天` : `还有 ${a.daysLeft} 天`,
       }))
-      items.sort((x, y) => x.daysLeft - y.daysLeft)
+      items.sort((x, y) => (x.daysLeft < 0 ? Number.MAX_SAFE_INTEGER : x.daysLeft) - (y.daysLeft < 0 ? Number.MAX_SAFE_INTEGER : y.daysLeft))
       this.setData({ list: items, empty: items.length === 0 })
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'

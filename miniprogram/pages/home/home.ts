@@ -107,6 +107,8 @@ Page({
     recent: [] as RecentVO[],
     hasRecent: false,
     recentLoaded: false,
+    recentError: '',
+    recentLoading: false,
     nextAnn: null as { title: string; label: string } | null,
     fabLeft: 0,
     fabTop: 0,
@@ -125,7 +127,10 @@ Page({
     this.syncFabPosition()
     this.renderOptimistic()
     await getAppInstance().waitBoot()
-    if (!(await ensureCloudReady())) return
+    if (!(await ensureCloudReady())) {
+      this.setData({ ready: true, recentError: '连接失败，请重试' })
+      return
+    }
     await this.refresh()
   },
 
@@ -148,12 +153,24 @@ Page({
   },
 
   async refresh() {
-    await syncSession().catch(() => undefined)
+    if (this.data.recentLoading) return
+    this.setData({ recentLoading: true, recentError: '' })
+    let sessionFailed = false
+    await syncSession().catch(() => { sessionFailed = true })
     const couple = getCouple()
     if (!couple) {
-      this.setData({ ready: true, bound: false, recentLoaded: true })
+      this.setData(sessionFailed
+        ? { ready: true, recentError: '连接失败，请重试', recentLoading: false }
+        : { ready: true, bound: false, recentLoaded: true, recentLoading: false })
       return
     }
+
+    this.setData({
+      ready: true,
+      bound: !!couple.memberB,
+      days: daysBetween(couple.startDate),
+      startDate: couple.startDate,
+    })
 
     try {
       const moments = await listMomentsRecent(5)
@@ -163,7 +180,6 @@ Page({
 
       const identity = getIdentity()
       const myRole = identity.role
-      const days = daysBetween(couple.startDate)
 
       const recent: RecentVO[] = await Promise.all(
         moments.map(async (m: Moment) => {
@@ -191,10 +207,6 @@ Page({
       )
 
       this.setData({
-        ready: true,
-        bound: !!couple.memberB,
-        days,
-        startDate: couple.startDate,
         recent,
         hasRecent: recent.length > 0,
         recentLoaded: true,
@@ -202,8 +214,19 @@ Page({
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载失败'
       wx.showToast({ title: msg, icon: 'none' })
-      this.setData({ ready: true, recentLoaded: true })
+      this.setData({ ready: true, recentError: msg })
+    } finally {
+      this.setData({ recentLoading: false })
     }
+  },
+
+  async onRetryRecent() {
+    if (this.data.recentLoading) return
+    if (!(await ensureCloudReady())) {
+      this.setData({ recentError: '连接失败，请重试' })
+      return
+    }
+    await this.refresh()
   },
 
   onTapMoments() {

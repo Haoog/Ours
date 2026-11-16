@@ -11,6 +11,11 @@ const _ = db.command
 
 const MOMENT_TAGS = ['', 'daily', 'travel', 'rant']
 const QUERY_BATCH_SIZE = 100
+// Deploy ours with a timeout no greater than 600 seconds. The extra five
+// minutes cover clock skew and teardown after the platform stops an invocation.
+const SPACE_LEASE_MS = 15 * 60 * 1000
+const BACKUP_LIFETIME_MS = 24 * 60 * 60 * 1000
+const BACKUP_GRACE_MS = SPACE_LEASE_MS
 const DEFAULT_QUOTA = {
   maxMoments: 500,
   maxStorageBytes: 1024 * 1024 * 1024,
@@ -30,15 +35,26 @@ function todayKey(d = new Date()) {
 }
 
 function prevDayKey(dateKey) {
-  const d = new Date(dateKey + 'T12:00:00')
-  d.setDate(d.getDate() - 1)
-  return todayKey(d)
+  return new Date(dateKeyEpoch(dateKey) - 86400000).toISOString().slice(0, 10)
+}
+
+function dateKeyEpoch(key) {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key || ''))
+  if (!parts) return NaN
+  const year = Number(parts[1]), month = Number(parts[2]), day = Number(parts[3])
+  if (year < 1000) return NaN
+  const value = Date.UTC(year, month - 1, day)
+  const parsed = new Date(value)
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day ? value : NaN
+}
+
+function assertValidDateKey(key, label = '日期') {
+  if (!Number.isFinite(dateKeyEpoch(key))) throw new Error(`${label}格式不正确`)
+  return key
 }
 
 function daysBetween(startISO, end = new Date()) {
-  const s = new Date(startISO + 'T00:00:00')
-  const e = new Date(end.getFullYear(), end.getMonth(), end.getDate())
-  const ms = e.getTime() - s.getTime()
+  const ms = dateKeyEpoch(todayKey(end)) - dateKeyEpoch(startISO)
   return Math.max(0, Math.floor(ms / 86400000)) + 1
 }
 
@@ -98,7 +114,7 @@ function normalizeMomentFields(doc) {
 
 function resolveMomentDate(payload, couple) {
   const raw = (payload.momentDate || todayKey()).trim()
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) throw new Error('日期格式不正确')
+  assertValidDateKey(raw)
   const today = todayKey()
   if (raw > today) throw new Error('回忆日期不能晚于今天')
   if (couple.startDate && raw < couple.startDate) {
@@ -121,8 +137,9 @@ function roleOf(openid, couple) {
 function serializeCouple(doc) {
   if (!doc) return null
   const id = doc._id
-  const { _id, mediaCleanup, momentOrderVersion, ...rest } = doc
-  return { id, ...rest }
+  const { _id, mediaCleanup, momentOrderVersion, inviteTokenHash, spaceGate, ...rest } = doc
+  const selfBound = rest.memberA?.openid && rest.memberA.openid === rest.memberB?.openid
+  return { id, ...rest, ...(selfBound ? { memberB: null } : {}) }
 }
 
 function normalizeAccessCode(value) {
@@ -237,16 +254,11 @@ function requestContentLength(url, method = 'HEAD') {
           const contentRange = response.headers['content-range']
           const rangeMatch = typeof contentRange === 'string' ? contentRange.match(/\/(\d+)$/) : null
           const contentLength = Number(response.headers['content-length'])
-          const size = rangeMatch ? Number(rangeMatch[1]) : contentLength
           const status = Number(response.statusCode || 0)
-          response.resume()
-          response.once('end', () => {
-            if (status >= 200 && status < 300 && Number.isFinite(size) && size >= 0) {
-              finish(size)
-            } else {
-              finish(null)
-            }
-          })
+          // A ranged response's content-length is only the selected byte.
+          const size = rangeMatch ? Number(rangeMatch[1]) : status === 206 ? NaN : contentLength
+          finish(status >= 200 && status < 300 && Number.isFinite(size) && size >= 0 ? size : null)
+          response.destroy()
         },
       )
       request.once('timeout', () => {
@@ -261,9 +273,9 @@ function requestContentLength(url, method = 'HEAD') {
   })
 }
 
-async function measureCloudFileBytes(fileIDs) {
+async function measureCloudFileSizes(fileIDs) {
   const uniqueIDs = [...new Set(fileIDs.filter(id => typeof id === 'string' && id))]
-  if (!uniqueIDs.length) return 0
+  if (!uniqueIDs.length) return new Map()
 
   const urls = new Map()
   for (let i = 0; i < uniqueIDs.length; i += 50) {
@@ -297,16 +309,28 @@ async function measureCloudFileBytes(fileIDs) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(12, uniqueIDs.length) }, worker))
-  return sizes.reduce((total, size) => total + size, 0)
+  return new Map(uniqueIDs.map((id, index) => [id, sizes[index]]))
+}
+
+async function measureCloudFileBytes(fileIDs) {
+  const sizes = await measureCloudFileSizes(fileIDs)
+  return [...sizes.values()].reduce((total, size) => total + size, 0)
 }
 
 function assertMomentMediaBelongsToCouple(coupleId, moment) {
-  const allowedPrefix = `/moments/${coupleId}/`
   for (const fileID of momentFileIDs(moment)) {
-    if (!fileID.startsWith('cloud://') || !fileID.includes(allowedPrefix)) {
+    if (!cloudFileInPath(fileID, `moments/${coupleId}/`)) {
       throw new Error('动态中包含无效的媒体文件')
     }
   }
+}
+
+function cloudFileInPath(fileID, prefix) {
+  if (typeof fileID !== 'string' || !fileID.startsWith('cloud://')) return false
+  const separator = fileID.indexOf('/', 'cloud://'.length)
+  if (separator < 0) return false
+  const path = fileID.slice(separator + 1)
+  return path.startsWith(prefix) && !path.split('/').some(part => part === '.' || part === '..')
 }
 
 async function findCoupleByMember(openid) {
@@ -323,6 +347,15 @@ async function findCoupleByMember(openid) {
   return res.data[0] || null
 }
 
+function membershipDoc(transaction, openid) {
+  return transaction.collection('space_memberships').doc(hashSecret(openid).slice(0, 32))
+}
+
+async function assertMembershipAvailable(transaction, openid) {
+  const membership = await optionalDoc(transaction.collection('space_memberships'), hashSecret(openid).slice(0, 32))
+  if (membership) throw new Error('你已加入一个双人空间')
+}
+
 async function getCoupleDoc(coupleId) {
   const res = await db.collection('couples').doc(coupleId).get()
   return res.data || null
@@ -337,27 +370,90 @@ async function requireMember(openid, coupleId) {
   return { couple, role }
 }
 
+// Every participant updates the same document transactionally, so a backup
+// cannot pass a ticket acquired by an already running operation.
+async function acquireSpaceLease(openid, coupleId, options = {}) {
+  const token = randomToken(16)
+  await db.runTransaction(async transaction => {
+    const ref = transaction.collection('couples').doc(coupleId)
+    const couple = await optionalDoc(transaction.collection('couples'), coupleId)
+    if (!couple) throw new Error('空间不存在')
+    if (options.inviteHash) {
+      const invite = await optionalDoc(transaction.collection('space_invites'), options.inviteId)
+      if (!invite || invite.tokenHash !== options.inviteHash || invite.coupleId !== coupleId) throw new Error('邀请链接已失效')
+      assertAccessActive(couple)
+      if (couple.memberA?.openid === openid) throw new Error('不能加入自己创建的空间')
+      const alreadyJoined = invite.status === 'used' && invite.usedBy === openid && couple.memberB?.openid === openid
+      if (!alreadyJoined && (invite.status !== 'active' || (invite.expiresAt && Number(invite.expiresAt) <= Date.now()) ||
+          (couple.inviteTokenHash && couple.inviteTokenHash !== options.inviteHash) || couple.memberB)) throw new Error('邀请链接已失效')
+    } else {
+      if (!roleOf(openid, couple)) throw new Error('无权访问该空间')
+      if (!options.allowInactive) assertAccessActive(couple)
+    }
+    const now = Date.now()
+    const previous = couple.spaceGate || {}
+    const tickets = Object.fromEntries(Object.entries(previous.tickets || {}).filter(([, expiry]) => expiry > now))
+    const backup = previous.backup?.expiresAt > now ? previous.backup : null
+    if (backup || (options.exclusive && Object.keys(tickets).length)) throw new Error('空间正在备份或处理其他操作，请稍后重试')
+    const spaceGate = options.exclusive
+      ? { tickets, backup: { token, expiresAt: now + SPACE_LEASE_MS } }
+      : { tickets: { ...tickets, [token]: now + SPACE_LEASE_MS }, backup: null }
+    await ref.update({ data: { spaceGate: _.set(spaceGate) } })
+  })
+  return { coupleId, token, exclusive: !!options.exclusive }
+}
+
+async function releaseSpaceLease(lease) {
+  if (!lease) return
+  await db.runTransaction(async transaction => {
+    const couple = await optionalDoc(transaction.collection('couples'), lease.coupleId)
+    if (!couple) return
+    const gate = couple.spaceGate || {}
+    if (lease.exclusive) {
+      if (gate.backup?.token !== lease.token) return
+      gate.backup = null
+    } else {
+      if (!gate.tickets?.[lease.token]) return
+      delete gate.tickets[lease.token]
+    }
+    await transaction.collection('couples').doc(lease.coupleId).update({ data: { spaceGate: _.set(gate) } })
+  })
+}
+
+async function safelyReleaseSpaceLease(lease) {
+  try { await releaseSpaceLease(lease) } catch (error) { console.warn('space lease release', error.message) }
+}
+
 async function getAllByWhere(collectionName, where, options = {}) {
   const batchSize = Math.min(options.batchSize || QUERY_BATCH_SIZE, QUERY_BATCH_SIZE)
   const out = []
-  let skip = 0
+  let lastId = null
 
   while (true) {
-    let query = db.collection(collectionName).where(where)
-    if (options.orderBy) {
-      const orders = Array.isArray(options.orderBy[0]) ? options.orderBy : [options.orderBy]
-      for (const [field, direction] of orders) {
-        query = query.orderBy(field, direction)
-      }
+    let query = db.collection(collectionName).where(lastId === null ? where : { ...where, _id: _.gt(lastId) })
+      .orderBy('_id', 'asc')
+    if (options.field) {
+      const sortFields = Object.fromEntries((options.orderBy || []).map(([field]) => [field, true]))
+      query = query.field({ ...options.field, ...sortFields, _id: true })
     }
-    if (options.field) query = query.field(options.field)
 
-    const res = await query.skip(skip).limit(batchSize).get()
+    const res = await query.limit(batchSize).get()
     out.push(...res.data)
     if (res.data.length < batchSize) break
-    skip += batchSize
+    lastId = res.data[res.data.length - 1]._id
   }
 
+  if (options.orderBy?.length) {
+    out.sort((a, b) => {
+      for (const [field, direction] of options.orderBy) {
+        const left = field.split('.').reduce((value, key) => value?.[key], a)
+        const right = field.split('.').reduce((value, key) => value?.[key], b)
+        if (left === right) continue
+        return (left == null ? -1 : right == null ? 1 : left < right ? -1 : 1) * (direction === 'desc' ? -1 : 1)
+      }
+      return 0
+    })
+  }
   return out
 }
 
@@ -365,7 +461,7 @@ function usageFromRecords(moments, rants) {
   const postMoments = moments.filter(moment => moment.kind !== 'system')
   const mediaRecords = [...postMoments, ...rants]
   const mediaItems = mediaRecords.reduce((total, record) => (
-    total + (Number.isFinite(Number(record.mediaItems))
+    total + (record.mediaItems != null && Number.isFinite(Number(record.mediaItems))
       ? integerOr(record.mediaItems, 0, 0)
       : countMomentMedia(record))
   ), 0)
@@ -394,12 +490,17 @@ async function rebuildUsage(coupleId) {
     ...moments.filter(moment => moment.kind !== 'system').flatMap(collectMomentFileIDs),
     ...rants.flatMap(collectMomentFileIDs),
   ]
-  const recordedBytesWithoutFiles = mediaRecords
-    .filter(record => collectMomentFileIDs(record).length === 0)
-    .reduce((total, record) => total + integerOr(record.mediaBytes, 0, 0), 0)
+  const sizes = await measureCloudFileSizes(fileIDs)
+  // A file referenced by two records is charged to both records, matching
+  // normal publish/delete accounting. Duplicate IDs within one record count once.
+  const storageBytes = mediaRecords.reduce((total, record) => {
+    const ids = collectMomentFileIDs(record)
+    if (!ids.length) return total + integerOr(record.mediaBytes, 0, 0)
+    return total + ids.reduce((sum, id) => sum + (sizes.get(id) || 0), 0)
+  }, 0)
   return {
     ...basicUsage,
-    storageBytes: (await measureCloudFileBytes(fileIDs)) + recordedBytesWithoutFiles,
+    storageBytes,
   }
 }
 
@@ -459,7 +560,7 @@ async function advanceStreak(coupleId, today) {
   if (!last) {
     streakDays = 1
   } else {
-    const diff = daysBetween(last, new Date(today + 'T00:00:00')) - 1
+    const diff = Math.floor((dateKeyEpoch(today) - dateKeyEpoch(last)) / 86400000)
     streakDays = diff === 1 ? streakDays + 1 : 1
   }
 
@@ -474,7 +575,15 @@ async function bootstrap(openid, payload = {}) {
   let couple = await findCoupleByMember(openid)
   if (couple) {
     if (couple.mediaCleanup) {
-      await drainMediaCleanup(couple._id).catch(error => console.warn('pending cleanup', error.message))
+      let lease
+      try {
+        lease = await acquireSpaceLease(openid, couple._id, { allowInactive: true, exclusive: true })
+        await drainMediaCleanup(couple._id)
+      } catch (error) {
+        console.warn('pending cleanup', error.message)
+      } finally {
+        await safelyReleaseSpaceLease(lease)
+      }
     }
     const expired = couple.expiresAt && Number(couple.expiresAt) <= Date.now()
     const status = couple.status === 'suspended' || couple.status === 'revoked'
@@ -533,21 +642,21 @@ async function redeemAccessCode(openid, payload = {}) {
   if (!code || code.length < 8) throw new Error('请输入有效的邀请码')
   const startDate = String(payload.startDate || '').trim()
   if (!startDate) throw new Error('请选择在一起的开始日期')
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new Error('日期格式不正确')
+  assertValidDateKey(startDate)
+  if (startDate > todayKey()) throw new Error('开始日期不能晚于今天')
 
   const nickname = String(payload.nickname || '你').trim() || '你'
   const avatarUrl = String(payload.avatarUrl || '')
   const codeHash = hashSecret(code)
+  const codeRes = await db.collection('access_codes').where({ codeHash }).limit(1).get()
+  const accessId = codeRes.data[0]?._id
+  if (!accessId) throw new Error('邀请码不存在')
   let created
 
   await db.runTransaction(async transaction => {
-    const codeRes = await transaction
-      .collection('access_codes')
-      .where({ codeHash })
-      .limit(1)
-      .get()
-    const access = codeRes.data[0]
-    if (!access) throw new Error('邀请码不存在')
+    await assertMembershipAvailable(transaction, openid)
+    const access = await optionalDoc(transaction.collection('access_codes'), accessId)
+    if (!access || access.codeHash !== codeHash) throw new Error('邀请码不存在')
     if (access.status !== 'unused') throw new Error('邀请码已使用或已失效')
     if (access.expiresAt && Number(access.expiresAt) <= Date.now()) {
       throw new Error('邀请码已过期')
@@ -570,16 +679,18 @@ async function redeemAccessCode(openid, payload = {}) {
       createdAt: Date.now(),
     }
 
-    const coupleRes = await transaction.collection('couples').add({ data })
+    const coupleId = randomToken(16)
+    await transaction.collection('couples').doc(coupleId).set({ data })
+    await membershipDoc(transaction, openid).set({ data: { coupleId } })
     await transaction.collection('access_codes').doc(access._id).update({
       data: {
         status: 'active',
-        coupleId: coupleRes._id,
+        coupleId,
         redeemedBy: openid,
         redeemedAt: Date.now(),
       },
     })
-    created = { _id: coupleRes._id, ...data }
+    created = { _id: coupleId, ...data }
   })
 
   return serializeCouple(created)
@@ -587,23 +698,21 @@ async function redeemAccessCode(openid, payload = {}) {
 
 async function createPartnerInvite(openid, payload = {}) {
   const { coupleId } = payload
-  const { couple } = await requireMember(openid, coupleId)
-  if (couple.memberB) throw new Error('这个空间已经连接好啦')
-
+  await requireMember(openid, coupleId)
   const token = randomToken()
+  const tokenHash = hashSecret(token)
   const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000
-  await db.collection('space_invites').where({ coupleId, status: 'active' }).update({
-    data: { status: 'revoked', revokedAt: Date.now() },
-  }).catch(() => undefined)
-  await db.collection('space_invites').add({
-    data: {
-      tokenHash: hashSecret(token),
-      coupleId,
-      status: 'active',
-      expiresAt,
-      createdBy: openid,
-      createdAt: Date.now(),
-    },
+  await db.runTransaction(async transaction => {
+    const ref = transaction.collection('couples').doc(coupleId)
+    const couple = await optionalDoc(transaction.collection('couples'), coupleId)
+    if (!couple || !roleOf(openid, couple)) throw new Error('无权访问该空间')
+    assertAccessActive(couple)
+    const selfBound = couple.memberA?.openid === openid && couple.memberB?.openid === openid
+    if (couple.memberB && !selfBound) throw new Error('这个空间已经连接好啦')
+    await transaction.collection('space_invites').doc(tokenHash).set({ data: {
+      tokenHash, coupleId, status: 'active', expiresAt, createdBy: openid, createdAt: Date.now(),
+    } })
+    await ref.update({ data: { inviteTokenHash: tokenHash, ...(selfBound ? { memberB: null } : {}) } })
   })
   return { token, expiresAt }
 }
@@ -613,30 +722,35 @@ async function joinPartnerInvite(openid, payload = {}) {
   const token = String(inviteToken || '').trim()
   if (!token) throw new Error('邀请链接无效')
 
+  const tokenHash = hashSecret(token)
+  const [inviteRes, existing] = await Promise.all([
+    db.collection('space_invites').where({ tokenHash }).limit(1).get(),
+    findCoupleByMember(openid),
+  ])
+  const matchedInvite = inviteRes.data[0]
+  if (!matchedInvite) throw new Error('邀请链接已失效')
+  if (existing && existing._id !== matchedInvite.coupleId) throw new Error('你已加入一个双人空间')
+
+  const lease = await acquireSpaceLease(openid, matchedInvite.coupleId, { inviteHash: tokenHash, inviteId: matchedInvite._id })
+  try {
   let joined
   await db.runTransaction(async transaction => {
-    const inviteRes = await transaction
-      .collection('space_invites')
-      .where({ tokenHash: hashSecret(token) })
-      .limit(1)
-      .get()
-    const invite = inviteRes.data[0]
-    if (!invite || invite.status !== 'active') throw new Error('邀请链接已失效')
-    if (invite.expiresAt && Number(invite.expiresAt) <= Date.now()) {
-      throw new Error('邀请链接已过期')
-    }
-
-    const coupleRes = await transaction.collection('couples').doc(invite.coupleId).get()
-    const couple = coupleRes.data
+    const invite = await optionalDoc(transaction.collection('space_invites'), matchedInvite._id)
+    if (!invite || invite.tokenHash !== tokenHash) throw new Error('邀请链接已失效')
+    const couple = await optionalDoc(transaction.collection('couples'), invite.coupleId)
     if (!couple) throw new Error('空间不存在')
     assertAccessActive(couple)
-    if (couple.memberB) {
-      if (couple.memberB.openid === openid) {
-        joined = couple
-        return
-      }
-      throw new Error('该空间已满')
+    if (couple.memberA?.openid === openid) throw new Error('不能加入自己创建的空间')
+    if (invite.status === 'used' && invite.usedBy === openid && couple.memberB?.openid === openid) {
+      joined = couple
+      return
     }
+    // Spaces without a pointer retain compatibility with historical invites until the first new invite.
+    if (couple.inviteTokenHash && couple.inviteTokenHash !== tokenHash) throw new Error('邀请链接已失效')
+    if (invite.status !== 'active') throw new Error('邀请链接已失效')
+    if (invite.expiresAt && Number(invite.expiresAt) <= Date.now()) throw new Error('邀请链接已过期')
+    if (couple.memberB) throw new Error('该空间已满')
+    await assertMembershipAvailable(transaction, openid)
 
     const memberB = {
       openid,
@@ -646,6 +760,7 @@ async function joinPartnerInvite(openid, payload = {}) {
     await transaction.collection('couples').doc(invite.coupleId).update({
       data: { memberB },
     })
+    await membershipDoc(transaction, openid).set({ data: { coupleId: invite.coupleId } })
     await transaction.collection('space_invites').doc(invite._id).update({
       data: { status: 'used', usedBy: openid, usedAt: Date.now() },
     })
@@ -653,6 +768,9 @@ async function joinPartnerInvite(openid, payload = {}) {
   })
 
   return serializeCouple(joined)
+  } finally {
+    await safelyReleaseSpaceLease(lease)
+  }
 }
 
 // 兼容旧 action 名，但不再接受裸 coupleId，避免通过空间 id 越权加入。
@@ -663,6 +781,8 @@ async function joinCouple(openid, payload = {}) {
 async function updateStartDate(openid, payload = {}) {
   const { coupleId, startDate } = payload
   await requireMember(openid, coupleId)
+  assertValidDateKey(startDate)
+  if (startDate > todayKey()) throw new Error('开始日期不能晚于今天')
   await db.collection('couples').doc(coupleId).update({
     data: { startDate },
   })
@@ -706,8 +826,10 @@ async function deleteCloudFiles(fileIDs) {
     const batch = fileIDs.slice(i, i + batchSize)
     try {
       const result = await cloud.deleteFile({ fileList: batch })
-      for (const item of result.fileList || []) {
-        if (item.status !== 0 && item.status !== -503003) failed.push(item.fileID)
+      const statuses = new Map((result.fileList || []).map(item => [item.fileID, item.status]))
+      for (const id of batch) {
+        const status = statuses.get(id)
+        if (status !== 0 && status !== -503003) failed.push(id)
       }
     } catch (e) {
       failed.push(...batch)
@@ -747,19 +869,17 @@ async function assertTextSafe(openid, text, label = '内容') {
   }
 }
 
-function daysUntilAnniversary(dateStr, yearly = true) {
-  const now = new Date()
-  now.setHours(0, 0, 0, 0)
-  const parts = dateStr.split('-').map(Number)
-  let target
-  if (yearly && parts.length >= 3) {
-    target = new Date(now.getFullYear(), parts[1] - 1, parts[2])
-    if (target < now) target = new Date(now.getFullYear() + 1, parts[1] - 1, parts[2])
-  } else {
-    target = new Date(dateStr + 'T00:00:00')
-  }
-  target.setHours(0, 0, 0, 0)
-  return Math.max(0, Math.round((target - now) / 86400000))
+function daysUntilAnniversary(dateStr, yearly = true, now = new Date()) {
+  const original = dateKeyEpoch(dateStr)
+  if (!Number.isFinite(original)) return 0
+  const today = todayKey(now)
+  const todayEpoch = dateKeyEpoch(today)
+  if (!yearly) return (original - todayEpoch) / 86400000
+  const [, month, day] = dateStr.split('-').map(Number)
+  const inYear = year => Date.UTC(year, month - 1, Math.min(day, new Date(Date.UTC(year, month, 0)).getUTCDate()))
+  const year = Number(today.slice(0, 4))
+  const next = inYear(year) < todayEpoch ? inYear(year + 1) : inYear(year)
+  return (next - todayEpoch) / 86400000
 }
 
 function pickCoverFileID(m) {
@@ -820,10 +940,15 @@ async function enrichMomentsList(items, coupleId, role) {
   let commentsRes = { data: [] }
   let likesRes = { data: [] }
   try {
-    ;[commentsRes, likesRes] = await Promise.all([
-      db.collection('moment_comments').where({ coupleId, momentId: _.in(momentIds) }).get(),
-      db.collection('moment_likes').where({ coupleId, momentId: _.in(momentIds) }).get(),
-    ])
+    for (let index = 0; index < momentIds.length; index += 20) {
+      const momentId = _.in(momentIds.slice(index, index + 20))
+      const [comments, likes] = await Promise.all([
+        getAllByWhere('moment_comments', { coupleId, momentId }),
+        getAllByWhere('moment_likes', { coupleId, momentId }),
+      ])
+      commentsRes.data.push(...comments)
+      likesRes.data.push(...likes)
+    }
   } catch (e) {
     console.warn('enrichMomentsList', e.message)
   }
@@ -863,12 +988,14 @@ async function queryMomentsPage(openid, payload, withKeyword) {
   const { coupleId, limit = 20, skip = 0, tag, mediaFilter, keyword, locationKey, year, month } = payload
   const { role, couple } = await requireMember(openid, coupleId)
   await ensureMomentDates(coupleId, couple)
-  const pageSize = Math.min(Math.max(limit, 1), 50)
+  const pageSize = integerOr(limit, 20, 1, 50)
+  const offset = integerOr(skip, 0)
   const where = { coupleId, kind: 'post' }
   if (tag) where.tag = tag
   if (locationKey) {
-    const [latitude, longitude] = String(locationKey).split(',').map(Number)
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) throw new Error('地点无效')
+    const parts = String(locationKey).split(',')
+    const [latitude, longitude] = parts.map(Number)
+    if (parts.length !== 2 || parts.some(part => !part.trim()) || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) throw new Error('地点无效')
     where['location.latitude'] = _.gte(latitude - 0.00005).and(_.lt(latitude + 0.00005))
     where['location.longitude'] = _.gte(longitude - 0.00005).and(_.lt(longitude + 0.00005))
   }
@@ -883,27 +1010,27 @@ async function queryMomentsPage(openid, payload, withKeyword) {
   }
 
   if (mediaFilter) {
-    const fetchSize = Math.min(pageSize * 4, 100)
-    const res = await db
-      .collection('moments')
-      .where(where)
-      .orderBy('momentDate', 'desc').orderBy('createdAt', 'desc').orderBy('_id', 'desc')
-      .skip(skip)
-      .limit(fetchSize)
-      .get()
-    const raw = res.data
-      .map(m => {
-        const { _id, ...rest } = m
-        return normalizeMomentFields({ id: _id, ...rest })
-      })
-      .filter(m => passesMediaFilter(m, mediaFilter))
-    const slice = raw.slice(0, pageSize)
-    const items = await enrichMomentsList(slice, coupleId, role)
-    return {
-      items,
-      total: skip + slice.length,
-      hasMore: raw.length >= pageSize,
+    if (!['image', 'voice', 'live'].includes(mediaFilter)) throw new Error('媒体筛选类型无效')
+    // Keep legacy documents searchable without requiring a migration. Offset
+    // and total must count matching rows, not unfiltered database rows.
+    const orderBy = [['momentDate', 'desc'], ['createdAt', 'desc'], ['_id', 'desc']]
+    const page = []
+    let total = 0
+    for (let rawOffset = 0; ; rawOffset += QUERY_BATCH_SIZE) {
+      let query = db.collection('moments').where(where)
+      for (const [field, direction] of orderBy) query = query.orderBy(field, direction)
+      const { data } = await query.skip(rawOffset).limit(QUERY_BATCH_SIZE).get()
+      for (const { _id, ...rest } of data) {
+        if (!passesMediaFilter(rest, mediaFilter)) continue
+        if (total >= offset && page.length < pageSize) {
+          page.push(normalizeMomentFields({ id: _id, ...rest }))
+        }
+        total++
+      }
+      if (data.length < QUERY_BATCH_SIZE) break
     }
+    const items = await enrichMomentsList(page, coupleId, role)
+    return { items, total, hasMore: offset + items.length < total }
   }
 
   const [countRes, res] = await Promise.all([
@@ -912,7 +1039,7 @@ async function queryMomentsPage(openid, payload, withKeyword) {
       .collection('moments')
       .where(where)
       .orderBy('momentDate', 'desc').orderBy('createdAt', 'desc').orderBy('_id', 'desc')
-      .skip(skip)
+      .skip(offset)
       .limit(pageSize)
       .get(),
   ])
@@ -925,7 +1052,7 @@ async function queryMomentsPage(openid, payload, withKeyword) {
   return {
     items,
     total,
-    hasMore: skip + items.length < total,
+    hasMore: offset + items.length < total,
   }
 }
 
@@ -943,7 +1070,8 @@ async function searchMoments(openid, payload = {}) {
 
 async function getOnThisDay(openid, payload = {}) {
   const { coupleId } = payload
-  const { role } = await requireMember(openid, coupleId)
+  const { role, couple } = await requireMember(openid, coupleId)
+  await ensureMomentDates(coupleId, couple)
   const today = todayKey()
   const md = today.slice(5)
   const moments = await getAllByWhere('moments', {
@@ -969,8 +1097,9 @@ async function getOnThisDay(openid, payload = {}) {
 
 async function getMomentsStats(openid, payload = {}) {
   const { coupleId, year, month } = payload
-  await requireMember(openid, coupleId)
-  const y = Number(year) || new Date().getFullYear()
+  const { couple } = await requireMember(openid, coupleId)
+  await ensureMomentDates(coupleId, couple)
+  const y = Number(year) || Number(todayKey().slice(0, 4))
   const m = Number(month)
   const prefix = m >= 1 && m <= 12 ? `${y}-${String(m).padStart(2, '0')}` : String(y)
   const moments = await getAllByWhere('moments', {
@@ -1020,8 +1149,8 @@ async function listMomentCollections(openid, payload = {}) {
   const { coupleId } = payload
   await requireMember(openid, coupleId)
   const moments = await getAllByWhere('moments', { coupleId })
-  const byTag = {}
-  const byPlace = {}
+  const byTag = Object.create(null)
+  const byPlace = Object.create(null)
   for (const doc of moments) {
     if (doc.kind === 'system') continue
     if (doc.tag) {
@@ -1046,20 +1175,37 @@ async function listMomentCollections(openid, payload = {}) {
 
 async function getMomentNeighbors(openid, payload = {}) {
   const { coupleId, momentId, tag } = payload
-  await requireMember(openid, coupleId)
+  const { couple } = await requireMember(openid, coupleId)
+  await ensureMomentDates(coupleId, couple)
   const where = { coupleId, kind: 'post' }
   if (tag) where.tag = tag
-  const moments = await getAllByWhere('moments', where, {
-    orderBy: [['momentDate', 'desc'], ['createdAt', 'desc'], ['_id', 'desc']],
-    field: { _id: true, momentDate: true, createdAt: true },
-  })
-  const ids = moments.map(doc => doc._id)
-  const idx = ids.indexOf(momentId)
+  const collection = db.collection('moments')
+  const current = await optionalDoc(collection, momentId)
+  if (!current || current.coupleId !== coupleId || current.kind !== 'post' || (tag && current.tag !== tag)) {
+    const { total } = await collection.where(where).count()
+    return { prevId: null, nextId: null, index: 0, total }
+  }
+
+  const { momentDate, createdAt } = current
+  const range = op => collection.where(_.or([
+    { ...where, momentDate: _[op](momentDate) },
+    { ...where, momentDate, createdAt: _[op](createdAt) },
+    { ...where, momentDate, createdAt, _id: _[op](momentId) },
+  ]))
+  const nearest = (query, order) => query
+    .orderBy('momentDate', order).orderBy('createdAt', order).orderBy('_id', order)
+    .field({ _id: true }).limit(1).get()
+  const [prev, next, before, total] = await Promise.all([
+    nearest(range('gt'), 'asc'),
+    nearest(range('lt'), 'desc'),
+    range('gt').count(),
+    collection.where(where).count(),
+  ])
   return {
-    prevId: idx > 0 ? ids[idx - 1] : null,
-    nextId: idx >= 0 && idx < ids.length - 1 ? ids[idx + 1] : null,
-    index: idx >= 0 ? idx + 1 : 0,
-    total: ids.length,
+    prevId: prev.data[0]?._id ?? null,
+    nextId: next.data[0]?._id ?? null,
+    index: before.total + 1,
+    total: total.total,
   }
 }
 
@@ -1102,6 +1248,7 @@ async function addMoment(openid, payload = {}) {
     voices: voices || [],
   }
   const mediaItems = countMomentMedia(media)
+  if (!String(content || '').trim() && !mediaItems) throw new Error('请填写文字或添加媒体')
   assertMomentMediaBelongsToCouple(coupleId, media)
   const quota = normalizeQuota(couple.quota || {})
   if (mediaItems > quota.maxMediaPerMoment) {
@@ -1155,6 +1302,9 @@ async function addMoment(openid, payload = {}) {
       ? usageOf(freshCouple)
       : legacyUsage || usageOf(freshCouple)
     const freshQuota = normalizeQuota(freshCouple.quota || {})
+    if (mediaItems > freshQuota.maxMediaPerMoment) {
+      throw new Error(`一条动态最多添加 ${freshQuota.maxMediaPerMoment} 个媒体文件`)
+    }
     if (freshUsage.momentCount >= freshQuota.maxMoments) {
       throw new Error('已达到动态数量额度，请联系管理员')
     }
@@ -1201,11 +1351,32 @@ async function drainMediaCleanup(coupleId) {
     if (isCollectionMissingError(error)) return []
     throw error
   })
+  // A snapshot is registered as a cleanup task until it expires. If it cannot
+  // be read, leave all tasks untouched: its media references are unknown.
+  const snapshotFiles = Object.values(couple?.mediaCleanup || {}).flatMap(task =>
+    (task.fileIDs || []).filter(id => cloudFileInPath(id, `backups/${coupleId}/`) && id.endsWith('/snapshot.json')))
+  const protectedFiles = new Set()
+  for (const fileID of snapshotFiles) {
+    const source = await cloud.downloadFile({ fileID })
+    const snapshot = JSON.parse(source.fileContent.toString('utf8'))
+    if (snapshot.coupleId !== coupleId || !Array.isArray(snapshot.files) || !Number.isFinite(snapshot.records?.exportedAt)) {
+      throw new Error('备份引用无法验证，已推迟媒体清理')
+    }
+    if (Date.now() - snapshot.records.exportedAt < BACKUP_LIFETIME_MS + BACKUP_GRACE_MS) {
+      // Older registrations may already be due at the original expiry.
+      protectedFiles.add(fileID)
+      for (const file of snapshot.files) {
+        if (typeof file?.fileID !== 'string') throw new Error('备份引用无法验证，已推迟媒体清理')
+        protectedFiles.add(file.fileID)
+      }
+    }
+  }
   // 清理前重新核对引用，保护响应丢失但实际已发布成功的媒体。
   const used = new Set([...moments, ...rants].flatMap(collectMomentFileIDs))
   for (const [key, task] of pending) {
-    const fileIDs = task.fileIDs.filter(id => !used.has(id))
-    const failed = await deleteCloudFiles(fileIDs)
+    const deferred = task.fileIDs.filter(id => protectedFiles.has(id))
+    const fileIDs = task.fileIDs.filter(id => !used.has(id) && !protectedFiles.has(id))
+    const failed = [...deferred, ...await deleteCloudFiles(fileIDs)]
     if (task.momentId) {
       await db.collection('moment_comments').where({ coupleId, momentId: task.momentId }).remove()
       await db.collection('moment_likes').where({ coupleId, momentId: task.momentId }).remove()
@@ -1223,9 +1394,8 @@ async function drainMediaCleanup(coupleId) {
 async function cleanupUploadedFiles(openid, payload = {}) {
   const { coupleId, fileIDs = [] } = payload
   await requireMember(openid, coupleId)
-  const allowedPrefix = `/moments/${coupleId}/`
-  const safeFileIDs = [...new Set(fileIDs)]
-    .filter(id => typeof id === 'string' && id.startsWith('cloud://') && id.includes(allowedPrefix))
+  const safeFileIDs = [...new Set(Array.isArray(fileIDs) ? fileIDs : [])]
+    .filter(id => cloudFileInPath(id, `moments/${coupleId}/`))
   if (safeFileIDs.length) {
     const key = hashSecret(safeFileIDs.slice().sort().join('|')).slice(0, 32)
     await db.collection('couples').doc(coupleId).update({ data: {
@@ -1238,9 +1408,9 @@ async function cleanupUploadedFiles(openid, payload = {}) {
 async function resolveMediaUrls(openid, payload = {}) {
   const { coupleId, fileIDs = [] } = payload
   await requireMember(openid, coupleId)
-  const allowed = [`/moments/${coupleId}/`, `/avatars/${coupleId}/`]
-  const safeFileIDs = [...new Set(fileIDs)]
-    .filter(id => typeof id === 'string' && id.startsWith('cloud://') && allowed.some(prefix => id.includes(prefix)))
+  const allowed = [`moments/${coupleId}/`, `avatars/${coupleId}/`]
+  const safeFileIDs = [...new Set(Array.isArray(fileIDs) ? fileIDs : [])]
+    .filter(id => allowed.some(prefix => cloudFileInPath(id, prefix)))
   return resolveFileUrls(safeFileIDs)
 }
 
@@ -1329,15 +1499,11 @@ async function listCheckins(openid, payload = {}) {
   const startKey = `${prefix}-01`
   const endKey = `${prefix}-${String(lastDay).padStart(2, '0')}`
 
-  const res = await db
-    .collection('checkins')
-    .where({
-      coupleId,
-      date: _.gte(startKey).and(_.lte(endKey)),
-    })
-    .get()
-
-  return res.data.map(c => {
+  const records = await getAllByWhere('checkins', {
+    coupleId,
+    date: _.gte(startKey).and(_.lte(endKey)),
+  })
+  return records.map(c => {
     const { _id, ...rest } = c
     return { id: _id, ...rest }
   })
@@ -1411,12 +1577,9 @@ async function getCheckinState(openid, payload = {}) {
 async function listAnniversaries(openid, payload = {}) {
   const { coupleId } = payload
   await requireMember(openid, coupleId)
-  const res = await db
-    .collection('anniversaries')
-    .where({ coupleId })
-    .orderBy('date', 'asc')
-    .get()
-  return res.data.map(a => {
+  const records = await getAllByWhere('anniversaries', { coupleId })
+  records.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+  return records.map(a => {
     const { _id, ...rest } = a
     return { id: _id, ...rest, daysLeft: daysUntilAnniversary(a.date, a.yearly !== false) }
   })
@@ -1425,8 +1588,10 @@ async function listAnniversaries(openid, payload = {}) {
 async function addAnniversary(openid, payload = {}) {
   const { coupleId, title, date, yearly = true, remind = true } = payload
   await requireMember(openid, coupleId)
+  if (!String(title || '').trim()) throw new Error('请填写纪念日名称')
   await assertTextSafe(openid, title, '纪念日名称')
   if (!date) throw new Error('请选择日期')
+  assertValidDateKey(date)
   const data = {
     coupleId,
     title: (title || '').trim(),
@@ -1442,14 +1607,15 @@ async function addAnniversary(openid, payload = {}) {
 async function deleteAnniversary(openid, payload = {}) {
   const { coupleId, anniversaryId } = payload
   await requireMember(openid, coupleId)
-  const res = await db.collection('anniversaries').doc(anniversaryId).get()
-  if (!res.data || res.data.coupleId !== coupleId) throw new Error('纪念日不存在')
+  const record = await optionalDoc(db.collection('anniversaries'), anniversaryId)
+  if (!record) return { ok: true }
+  if (record.coupleId !== coupleId) throw new Error('纪念日不存在')
   await db.collection('anniversaries').doc(anniversaryId).remove()
   return { ok: true }
 }
 
 async function getNextAnniversary(openid, payload = {}) {
-  const list = await listAnniversaries(openid, payload)
+  const list = (await listAnniversaries(openid, payload)).filter(item => item.daysLeft >= 0)
   if (!list.length) return null
   const sorted = [...list].sort((a, b) => a.daysLeft - b.daysLeft)
   const next = sorted[0]
@@ -1491,28 +1657,48 @@ async function startBackup(openid, payload = {}) {
   const result = await cloud.uploadFile({
     cloudPath: `backups/${coupleId}/${id}/snapshot.json`, fileContent: Buffer.from(JSON.stringify(snapshot)),
   })
-  await db.collection('couples').doc(coupleId).update({ data: {
-    [`mediaCleanup.${hashSecret(result.fileID).slice(0, 32)}`]: { fileIDs: [result.fileID], readyAt: Date.now() + 86400000 },
-  } })
+  try {
+    await db.collection('couples').doc(coupleId).update({ data: {
+      [`mediaCleanup.${hashSecret(result.fileID).slice(0, 32)}`]: { fileIDs: [result.fileID], readyAt: snapshot.records.exportedAt + BACKUP_LIFETIME_MS + BACKUP_GRACE_MS },
+    } })
+  } catch (error) {
+    await discardUnregisteredBackup(coupleId, result.fileID)
+    throw error
+  }
   return { snapshotFileID: result.fileID, parts: snapshot.parts, files: files.length, moments: records.moments.length, createdAt: snapshot.records.exportedAt }
+}
+
+async function discardUnregisteredBackup(coupleId, fileID) {
+  try {
+    const couple = await getCoupleDoc(coupleId)
+    if (!couple || couple.mediaCleanup?.[hashSecret(fileID).slice(0, 32)]) return
+    await deleteCloudFiles([fileID])
+  } catch (error) {
+    console.warn('backup cleanup', error.message)
+  }
 }
 
 async function exportBackupPart(openid, payload = {}) {
   const { coupleId, snapshotFileID } = payload
   await requireMember(openid, coupleId)
-  if (typeof snapshotFileID !== 'string' || !snapshotFileID.startsWith('cloud://') ||
-    !snapshotFileID.includes(`/backups/${coupleId}/`) || !snapshotFileID.endsWith('/snapshot.json')) throw new Error('备份无效')
+  if (!cloudFileInPath(snapshotFileID, `backups/${coupleId}/`) || !snapshotFileID.endsWith('/snapshot.json')) throw new Error('备份无效')
   const source = await cloud.downloadFile({ fileID: snapshotFileID })
   const snapshot = JSON.parse(source.fileContent.toString('utf8'))
-  if (snapshot.coupleId !== coupleId || Date.now() - snapshot.records.exportedAt > 86400000) throw new Error('备份已过期，请重新生成')
+  if (snapshot.coupleId !== coupleId || Date.now() - snapshot.records.exportedAt >= BACKUP_LIFETIME_MS) throw new Error('备份已过期，请重新生成')
   const part = integerOr(payload.part, -1, -1)
   if (part < 0 || part >= snapshot.parts) throw new Error('备份分卷无效')
   const { zipBackupPart } = require('./backup')
   const result = await zipBackupPart(cloud, snapshot, part, snapshot.files.slice(part * 10, (part + 1) * 10))
-  const urls = await resolveFileUrls([result.fileID])
-  await db.collection('couples').doc(coupleId).update({ data: {
-    [`mediaCleanup.${hashSecret(result.fileID).slice(0, 32)}`]: { fileIDs: [result.fileID], readyAt: Date.now() + 86400000 },
-  } })
+  let urls
+  try {
+    await db.collection('couples').doc(coupleId).update({ data: {
+      [`mediaCleanup.${hashSecret(result.fileID).slice(0, 32)}`]: { fileIDs: [result.fileID], readyAt: Date.now() + 86400000 },
+    } })
+    urls = await resolveFileUrls([result.fileID])
+  } catch (error) {
+    await discardUnregisteredBackup(coupleId, result.fileID)
+    throw error
+  }
   return { ...result, url: urls[result.fileID], name: `Ours-${todayKey()}-${part + 1}.zip` }
 }
 
@@ -1558,6 +1744,7 @@ async function addRant(openid, payload = {}) {
   const { role, couple } = await requireMember(openid, coupleId)
   await assertTextSafe(openid, content, '吐槽')
   const imgs = (images || []).slice(0, 3)
+  if (!String(content || '').trim() && !imgs.length) throw new Error('请填写文字或添加图片')
   assertMomentMediaBelongsToCouple(coupleId, { images: imgs })
   const mediaItems = imgs.length
   const usage = await usageForWrite(coupleId, couple)
@@ -1686,6 +1873,7 @@ async function sendNote(openid, payload = {}) {
   const { coupleId, content } = payload
   const { couple, role } = await requireMember(openid, coupleId)
   if (!couple.memberB) throw new Error('她加入后才能发小纸条')
+  if (!String(content || '').trim()) throw new Error('请填写小纸条内容')
   await assertTextSafe(openid, content, '小纸条')
   const toRole = role === 'A' ? 'B' : 'A'
   const data = {
@@ -1713,12 +1901,9 @@ async function markNoteRead(openid, payload = {}) {
 async function listComments(openid, payload = {}) {
   const { coupleId, momentId } = payload
   await requireMember(openid, coupleId)
-  const res = await db
-    .collection('moment_comments')
-    .where({ coupleId, momentId })
-    .orderBy('createdAt', 'asc')
-    .get()
-  return res.data.map(c => {
+  const records = await getAllByWhere('moment_comments', { coupleId, momentId })
+  records.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || String(a._id).localeCompare(String(b._id)))
+  return records.map(c => {
     const { _id, ...rest } = c
     return { id: _id, ...rest }
   })
@@ -1727,6 +1912,7 @@ async function listComments(openid, payload = {}) {
 async function addComment(openid, payload = {}) {
   const { coupleId, momentId, content } = payload
   const { role } = await requireMember(openid, coupleId)
+  if (!String(content || '').trim()) throw new Error('请填写评论内容')
   const m = await db.collection('moments').doc(momentId).get()
   if (!m.data || m.data.coupleId !== coupleId) throw new Error('动态不存在')
   if (m.data.kind === 'system') throw new Error('系统卡片暂不支持评论')
@@ -1746,9 +1932,10 @@ async function addComment(openid, payload = {}) {
 async function deleteComment(openid, payload = {}) {
   const { coupleId, commentId } = payload
   const { role } = await requireMember(openid, coupleId)
-  const res = await db.collection('moment_comments').doc(commentId).get()
-  if (!res.data || res.data.coupleId !== coupleId) throw new Error('评论不存在')
-  if (res.data.authorRole !== role) throw new Error('只能删除自己的评论')
+  const record = await optionalDoc(db.collection('moment_comments'), commentId)
+  if (!record) return { ok: true }
+  if (record.coupleId !== coupleId) throw new Error('评论不存在')
+  if (record.authorRole !== role) throw new Error('只能删除自己的评论')
   await db.collection('moment_comments').doc(commentId).remove()
   return { ok: true }
 }
@@ -1788,12 +1975,16 @@ async function setMomentLike(openid, payload = {}) {
   const moment = await optionalDoc(db.collection('moments'), momentId)
   if (!moment || moment.coupleId !== coupleId) throw new Error('动态不存在')
   const id = hashSecret(`${coupleId}:${momentId}:${openid}`).slice(0, 32)
+  // Resolve legacy random IDs before the transaction; it only supports document reads.
+  const { data: legacy } = await db.collection('moment_likes').where({ coupleId, momentId, openid }).get()
   await db.runTransaction(async transaction => {
     const current = await optionalDoc(transaction.collection('moment_likes'), id)
-    // 使用固定点赞编号时，清理旧版随机编号留下的重复记录。
-    const legacy = await transaction.collection('moment_likes').where({ coupleId, momentId, openid }).get()
-    for (const entry of legacy.data) {
-      if (entry._id !== id) await transaction.collection('moment_likes').doc(entry._id).remove()
+    const latestMoment = await optionalDoc(transaction.collection('moments'), momentId)
+    if (!latestMoment || latestMoment.coupleId !== coupleId) throw new Error('动态不存在')
+    for (const entry of legacy) {
+      if (entry._id === id) continue
+      const ref = transaction.collection('moment_likes').doc(entry._id)
+      if (await optionalDoc(transaction.collection('moment_likes'), entry._id)) await ref.remove()
     }
     if (liked) {
       await transaction.collection('moment_likes').doc(id).set({
@@ -1838,17 +2029,19 @@ async function listMapPlaces(openid, payload = {}) {
   const placeMap = new Map()
   const cityMap = new Map()
   for (const m of moments) {
-    if (!m.location || m.location.latitude == null) continue
+    if (m.kind === 'system' || !m.location || m.location.latitude == null || m.location.longitude == null) continue
     const loc = m.location
+    const latitude = Number(loc.latitude), longitude = Number(loc.longitude)
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) continue
     const normalized = normalizeMomentFields(m)
-    const key = `${loc.latitude.toFixed(4)},${loc.longitude.toFixed(4)}`
+    const key = `${latitude.toFixed(4)},${longitude.toFixed(4)}`
     if (!placeMap.has(key)) {
       placeMap.set(key, {
         id: key,
         name: loc.name,
         address: loc.address,
-        latitude: loc.latitude,
-        longitude: loc.longitude,
+        latitude,
+        longitude,
         momentCount: 0,
         latestMomentSortAt: -1,
         latestMomentId: '',
@@ -1866,11 +2059,11 @@ async function listMapPlaces(openid, payload = {}) {
       place.latestMomentSortAt = sortAt
       place.latestMomentId = m._id || m.id || ''
       place.latestMomentDate = normalized.momentDate || ''
-      place.latestMomentContent = (normalized.content || '').trim()
+      place.latestMomentContent = String(normalized.content || '').trim()
       place.latestMomentCoverId = pickCoverFileID(normalized)
       place.latestMomentHasVideo = (normalized.videos || []).length > 0
     }
-    const address = loc.address || ''
+    const address = String(loc.address || '')
     const city = address.match(/(?:省|自治区)([^省]+?市)/)?.[1] ||
       address.match(/^(北京市|上海市|天津市|重庆市)/)?.[1] ||
       address.match(/^(.+?市)/)?.[1] || loc.name || '未知'
@@ -1895,9 +2088,9 @@ async function listMapPlaces(openid, payload = {}) {
 }
 
 async function seedDemoData(openid, payload = {}) {
-  const { coupleId, envVersion } = payload
-  if (envVersion !== 'develop' && envVersion !== 'trial') {
-    throw new Error('演示数据仅可在开发版/体验版使用')
+  const { coupleId } = payload
+  if (process.env.OURS_ENABLE_DEMO_SEED !== '1') {
+    throw new Error('当前云环境未启用演示数据')
   }
   const { couple, role } = await requireMember(openid, coupleId)
   // Demo data is still real data in the database, so it must not silently
@@ -2083,7 +2276,13 @@ exports.main = async (event) => {
     return { ok: false, error: '未获取到 openid，请用真机或开发者工具登录' }
   }
 
+  let lease
   try {
+    // Bootstrap and invitation joining resolve and authenticate their space
+    // internally; new-space actions have no existing space to coordinate.
+    if (!['bootstrap', 'joinCouple', 'createCouple', 'redeemAccessCode'].includes(action)) {
+      lease = await acquireSpaceLease(openid, payload.coupleId, { exclusive: ['startBackup', 'deleteMoment', 'deleteRant'].includes(action) })
+    }
     let data
     switch (action) {
       case 'bootstrap':
@@ -2231,5 +2430,7 @@ exports.main = async (event) => {
     return { ok: true, data }
   } catch (err) {
     return { ok: false, error: err.message || String(err) }
+  } finally {
+    await safelyReleaseSpaceLease(lease)
   }
 }

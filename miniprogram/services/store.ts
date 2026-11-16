@@ -1,6 +1,5 @@
 // services/store.ts — v0.1 云开发数据层
 
-import { getAppInstance } from '../app'
 import { callOurs } from './cloud-api'
 import { resolveCloudUrl as resolveCachedCloudUrl } from '../utils/cloud-url-cache'
 import { asyncPool } from '../utils/async-pool'
@@ -189,14 +188,13 @@ export async function getMomentsBriefStats(): Promise<MomentsBriefStats> {
   return callOurs<MomentsBriefStats>('getMomentsBriefStats', { coupleId: coupleId() })
 }
 
-/** 仅开发/体验版：追加演示动态与纪念日（纯文字，无需上传媒体） */
+/** 仅在启用演示数据的云环境：追加演示动态与纪念日（纯文字，无需上传媒体） */
 export async function seedDemoData(): Promise<{
   moments: number
   anniversaries?: number
   rants?: number
   notes?: number
 }> {
-  const envVersion = getAppInstance().globalData.envVersion
   return callOurs<{
     moments: number
     anniversaries?: number
@@ -204,7 +202,6 @@ export async function seedDemoData(): Promise<{
     notes?: number
   }>('seedDemoData', {
     coupleId: coupleId(),
-    envVersion,
   })
 }
 
@@ -255,14 +252,18 @@ function uploadOne(
   onFileProgress?: (percent: number) => void,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const task = wx.cloud.uploadFile({ cloudPath, filePath }) as any
+    const task = wx.cloud.uploadFile({
+      cloudPath,
+      filePath,
+      success: res => resolve(res.fileID),
+      fail: reject,
+    })
     if (trackingUploads && task && typeof task.abort === 'function') {
       activeUploadTasks.push(task)
     }
-    if (onFileProgress && typeof task.onProgressUpdate === 'function') {
-      task.onProgressUpdate((res: any) => onFileProgress(res.progress))
+    if (onFileProgress && task && typeof task.onProgressUpdate === 'function') {
+      task.onProgressUpdate(res => onFileProgress(res.progress))
     }
-    task.then((res: any) => resolve(res.fileID)).catch(reject)
   })
 }
 
@@ -638,6 +639,7 @@ export async function addMoment(
   } finally {
     trackingUploads = false
     activeUploadTasks = []
+    uploadAborted = false
   }
 }
 

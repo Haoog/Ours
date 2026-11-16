@@ -37,9 +37,16 @@ function cacheGet(fileID: string): string | null {
   }
   return hit.url
 }
-function cacheSet(fileID: string, url: string) {
+function cacheSet(fileID: string, url: string, maxAgeSeconds?: number) {
   if (!url) return
-  urlCache.set(fileID, { url, expires: Date.now() + CACHE_TTL_MS })
+  const lifetime = maxAgeSeconds && maxAgeSeconds > 0
+    ? Math.max(0, maxAgeSeconds * 1000 - 30000)
+    : CACHE_TTL_MS
+  urlCache.set(fileID, { url, expires: Date.now() + Math.min(CACHE_TTL_MS, lifetime) })
+  queueCacheSave()
+}
+export function invalidateCachedUrl(fileID: string): void {
+  urlCache.delete(fileID)
   queueCacheSave()
 }
 async function fetchViaClientApi(fileIDs: string[]): Promise<Record<string, string>> {
@@ -49,7 +56,7 @@ async function fetchViaClientApi(fileIDs: string[]): Promise<Record<string, stri
     try {
       const res = await wx.cloud.getTempFileURL({ fileList: batch })
       for (const item of res.fileList || []) {
-        if (item.status === 0 && item.tempFileURL) { map[item.fileID] = item.tempFileURL; cacheSet(item.fileID, item.tempFileURL) }
+        if (item.status === 0 && item.tempFileURL) { map[item.fileID] = item.tempFileURL; cacheSet(item.fileID, item.tempFileURL, item.maxAge) }
       }
     } catch {}
   }
