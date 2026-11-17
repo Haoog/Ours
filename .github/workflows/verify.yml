@@ -20,3 +20,11 @@ jobs:
       - run: npm run verify:frontend
       - run: npm run verify:features
       - run: npm run admin:build
+      # 网页版与同步服务不依赖 npm 安装，直接构建并跑无需浏览器的回归。
+      - name: Verify web app
+        run: |
+          npm --prefix web run build
+          npm --prefix web run verify
+          node --test web/tests/wx-import.test.mjs web/tests/wx-prepare.test.mjs
+      - name: Verify sync service
+        run: npm --prefix ours-sync test

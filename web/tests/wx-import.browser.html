@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>小程序备份解析器浏览器测试</title>
+<pre id="result">测试进行中…</pre>
+<script type="module">
+import { parseWxBackup } from '../wx-import.js';
+
+const text = new TextEncoder();
+const bytes = value => typeof value === 'string' ? text.encode(value) : value;
+const join = parts => {
+  const output = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+  let position = 0;
+  for (const part of parts) { output.set(part, position); position += part.length; }
+  return output;
+};
+const number = (value, length) => {
+  const output = new Uint8Array(length), view = new DataView(output.buffer);
+  if (length === 2) view.setUint16(0, value, true);
+  else if (length === 4) view.setUint32(0, value, true);
+  else view.setBigUint64(0, BigInt(value), true);
+  return output;
+};
+const u16 = value => number(value, 2), u32 = value => number(value, 4), u64 = value => number(value, 8);
+function crc32(input) {
+  let crc = 0xffffffff;
+  for (const value of input) {
+    crc ^= value;
+    for (let i = 0; i < 8; i++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function zip(items) {
+  const locals = [], directory = [];
+  let offset = 0;
+  for (const [fileName, content] of items) {
+    const name = bytes(fileName), data = bytes(content), crc = crc32(data);
+    const local = join([u32(0x04034b50), u16(20), u16(0), u16(0), u32(0), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), name, data]);
+    directory.push(join([u32(0x02014b50), u16(0x031e), u16(20), u16(0), u16(0), u32(0), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0x81a40000), u32(offset), name]));
+    locals.push(local); offset += local.length;
+  }
+  const dir = join(directory), zip64Offset = offset + dir.length;
+  return new Blob([...locals, dir,
+    u32(0x06064b50), u64(44), u16(45), u16(45), u32(0), u32(0), u64(items.length), u64(items.length), u64(dir.length), u64(offset),
+    u32(0x07064b50), u32(0), u64(zip64Offset), u32(1),
+    u32(0x06054b50), u16(0), u16(0), u16(0xffff), u16(0xffff), u32(0xffffffff), u32(0xffffffff), u16(0),
+  ]);
+}
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+try {
+  const a = 'cloud://synthetic/photo.jpg', b = 'cloud://synthetic/video.mp4';
+  const records = { exportedAt: 1700000000000, space: { memberA: { avatarUrl: '' }, memberB: null }, moments: [{ images: [a], videos: [b] }], anniversaries: [], moment_comments: [], moment_likes: [], checkins: [], notes: [], rants: [] };
+  const manifest = [{ fileID: a, path: 'media/00001.jpg', size: 5 }, { fileID: b, path: 'media/00002.mp4', size: 5 }];
+  const part = (index, item, content) => zip([
+    ['records.json', JSON.stringify(records, null, 2)],
+    ['media-manifest.json', JSON.stringify(manifest, null, 2)],
+    [item.path, content],
+    ['backup-status.json', JSON.stringify({ part: index, parts: 2, missing: [] }, null, 2)],
+  ]);
+  const first = part(0, manifest[0], 'photo'), second = part(1, manifest[1], 'video');
+  const selected = new DataTransfer();
+  selected.items.add(new File([second], 'part-2.zip', { type: 'application/zip' }));
+  selected.items.add(new File([first], 'part-1.zip', { type: 'application/zip' }));
+  const result = await parseWxBackup(selected.files);
+  assert(result.parts === 2 && result.mediaByFileID.size === 2, '分卷或媒体数量错误');
+  assert(await result.mediaByFileID.get(a).text() === 'photo', '媒体字节错误');
+  assert(await result.mediaByFileID.get(b).text() === 'video', '媒体字节错误');
+  assert(result.checks.crossBackupIdentityVerified === false, '身份检查状态错误');
+  try { await parseWxBackup([first]); throw new Error('缺卷未被拒绝'); }
+  catch (error) { assert(error.code === 'PARTS', `缺卷错误不正确：${error.message}`); }
+  document.documentElement.dataset.result = 'pass';
+  document.getElementById('result').textContent = 'PASS: 浏览器 FileList、Blob、ZIP64、多卷、媒体字节和缺卷拒绝';
+} catch (error) {
+  document.documentElement.dataset.result = 'fail';
+  document.getElementById('result').textContent = `FAIL: ${error.stack || error.message}`;
+}
+</script>

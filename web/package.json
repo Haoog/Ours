@@ -1,0 +1,15 @@
+{
+  "name": "ours-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ours independent landing page and local-first web app",
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/serve.mjs dist",
+    "verify": "node scripts/verify-backup.mjs",
+    "verify:update": "python3 tests/service-worker-update.py"
+  },
+  "engines": { "node": ">=20" }
+}
