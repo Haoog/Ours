@@ -14,3 +14,23 @@ input:disabled{cursor:not-allowed}
 @media(max-width:360px){.hero h1{font-size:33px}.hero-art{transform:scale(.9);transform-origin:top center;margin-bottom:-35px}.intro-aside{display:none}.site-footer p{display:none}.app-header-title{font-size:10px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
 .sync-panel{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:16px;padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:#f6f4fa}.sync-panel p{font-size:12px;color:#6c6478;margin:0}.sync-panel>div{display:flex;flex:none;gap:12px}.sync-panel button{padding:4px 0;border:0;background:none;color:var(--purple-dark);font-size:12px;font-weight:650}.sync-panel.conflict{background:#fff5e7;border-color:#f1dfc8}.sync-panel.conflict p{color:#80512d}.sync-toggle{display:flex;align-items:center;gap:9px;margin:20px 0;font-size:13px;font-weight:650}.sync-input{display:block;width:100%;padding:11px 13px;margin:0 0 18px;border:1px solid #e5dfeb;border-radius:8px;background:#fbfafc;color:var(--ink)}.sync-input:focus{outline:0;border-color:#a99acb;box-shadow:0 0 0 3px #ece7f5}.info-dialog form>p{font-size:13px;color:#777080;line-height:1.9}.info-dialog .dialog-actions{flex-wrap:wrap}@media(max-width:720px){.sync-panel{align-items:flex-start;flex-direction:column;gap:4px}.journal-toolbar{flex-wrap:wrap}}
+
+/* 下载区：下面这组规则接管下载清单的排版（数据来自 releases.json）。 */
+.download-option{display:block;min-height:0;padding:18px 0}
+.download-option-row{display:flex;align-items:center;justify-content:space-between;gap:20px}
+.download-option-row>a{color:var(--purple);font-size:13px;font-weight:650;white-space:nowrap}
+.download-option-action{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
+.download-link{display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 15px;border-radius:7px;background:var(--purple);color:#fff;font-size:13px;font-weight:650;white-space:nowrap}
+.download-link:hover{background:var(--purple-dark)}
+.download-checksum{font-size:10px;color:#a9a1b2;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.download-note{font-size:12px;color:#8f889b;line-height:1.85;margin:8px 0 0;max-width:460px}
+.download-notes{font-size:11px;color:#9a93a1;line-height:1.8;margin:6px 0 0}
+.download-option[data-state="unpublished"] strong{color:#6d6679}
+.download-changelog{border-top:1px solid var(--line);margin-top:18px;padding-top:20px}
+.download-changelog .section-kicker{margin-bottom:6px}
+.download-changelog-item{display:grid;grid-template-columns:auto 1fr;align-items:baseline;gap:2px 10px;padding:11px 0;border-bottom:1px solid var(--line)}
+.download-changelog-item strong{font-size:13px}
+.download-changelog-item>span{font-size:11px;color:#a49daa}
+.download-changelog-item p{grid-column:1/-1;font-size:12px;color:#8b8494;line-height:1.8;margin:2px 0 0}
+.download-status{font-size:11px;color:#9a93a1;line-height:1.8;margin:18px 0 0}
+@media(max-width:720px){.download-option-row{flex-wrap:wrap;gap:12px}.download-option-action{align-items:flex-start}.download-note{max-width:none}}

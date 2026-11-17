@@ -25,6 +25,6 @@ jobs:
         run: |
           npm --prefix web run build
           npm --prefix web run verify
-          node --test web/tests/wx-import.test.mjs web/tests/wx-prepare.test.mjs
+          node --test web/tests/wx-import.test.mjs web/tests/wx-prepare.test.mjs web/tests/releases.test.mjs
       - name: Verify sync service
         run: npm --prefix ours-sync test

@@ -5,7 +5,7 @@ const BUILD_VERSION = 'dev';
 const BUILD_ASSETS = null;
 const CACHE = `${CACHE_PREFIX}v2-${BUILD_VERSION}`;
 // The build supplies the deployed files; the fallback supports the development server.
-const ASSET_PATHS = BUILD_ASSETS || ['./', './index.html', './styles.css', './app.js', './storage.js', './sync.js', './sync-engine.js', './backup.js', './wx-import.js', './wx-prepare.js', './manifest.webmanifest', './assets/icon.svg', './assets/icon-180.png', './assets/icon-192.png', './assets/icon-512.png', './assets/walk.svg', './assets/evening.svg', './assets/table.svg'];
+const ASSET_PATHS = BUILD_ASSETS || ['./', './index.html', './styles.css', './app.js', './storage.js', './sync.js', './sync-engine.js', './backup.js', './wx-import.js', './wx-prepare.js', './downloads.js', './releases.js', './manifest.webmanifest', './assets/icon.svg', './assets/icon-180.png', './assets/icon-192.png', './assets/icon-512.png', './assets/walk.svg', './assets/evening.svg', './assets/table.svg'];
 const ASSETS = ASSET_PATHS.map(asset => BUILD_VERSION === 'dev' || asset === './' || asset === './index.html' ? asset : `${asset}?v=${BUILD_VERSION}`);
 const ASSET_URLS = new Set(ASSETS.map(asset => new URL(asset, SCOPE).href));
 // CSS and script-generated URLs can still refer to a precached file without ?v=.

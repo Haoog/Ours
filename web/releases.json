@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-11-17",
+  "platforms": [
+    {
+      "id": "web",
+      "name": "网页版",
+      "detail": "手机和电脑的浏览器都能打开，最近用过一次之后也可以添加到主屏幕",
+      "status": "available",
+      "cta": { "label": "打开网页版", "href": "#/app" },
+      "note": "已经在用，打开时会自己检查新版本，不需要重新安装。"
+    },
+    {
+      "id": "ios",
+      "name": "iPhone / iPad",
+      "detail": "原生应用，可以从这里下载安装",
+      "status": "unpublished",
+      "note": "还没有可以安装的版本。现在可以先用网页版：在 Safari 里打开，轻点分享，选择「添加到主屏幕」。"
+    },
+    {
+      "id": "macos",
+      "name": "macOS",
+      "detail": "桌面应用",
+      "status": "unpublished",
+      "note": "还没有可以安装的版本。打包做好后会出现在这里，带版本号和校验和。"
+    },
+    {
+      "id": "windows",
+      "name": "Windows",
+      "detail": "桌面应用",
+      "status": "unpublished",
+      "note": "还没有可以安装的版本。"
+    }
+  ],
+  "changelog": []
+}

@@ -6,8 +6,8 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'dist');
-const files = ['index.html', 'styles.css', 'app.js', 'storage.js', 'sync.js', 'sync-engine.js', 'backup.js', 'wx-import.js', 'wx-prepare.js', 'service-worker.js', 'manifest.webmanifest'];
-for (const name of ['app.js', 'storage.js', 'sync.js', 'sync-engine.js', 'backup.js', 'wx-import.js', 'wx-prepare.js', 'service-worker.js']) {
+const files = ['index.html', 'styles.css', 'app.js', 'storage.js', 'sync.js', 'sync-engine.js', 'backup.js', 'wx-import.js', 'wx-prepare.js', 'downloads.js', 'releases.js', 'service-worker.js', 'manifest.webmanifest'];
+for (const name of ['app.js', 'storage.js', 'sync.js', 'sync-engine.js', 'backup.js', 'wx-import.js', 'wx-prepare.js', 'downloads.js', 'releases.js', 'service-worker.js']) {
   const result = spawnSync(process.execPath, ['--check', path.join(root, name)], { stdio: 'inherit' });
   if (result.status !== 0) process.exit(result.status || 1);
 }
@@ -64,4 +64,11 @@ for (const name of files) {
   }
 }
 await cp(path.join(root, 'assets'), path.join(output, 'assets'), { recursive: true });
+// 发布清单刻意不写版本号、也不进 Service Worker 预缓存：每次打开都重新取，
+// 换版本时只需要替换部署目录里的 releases.json 和安装包，不用重新构建。
+await cp(path.join(root, 'releases.json'), path.join(output, 'releases.json'));
+const installers = path.join(root, 'downloads');
+if (await access(installers).then(() => true, () => false)) {
+  await cp(installers, path.join(output, 'downloads'), { recursive: true });
+}
 console.log(`Built static site in web/dist (version ${version}). Serve it over HTTPS (or localhost).`);
