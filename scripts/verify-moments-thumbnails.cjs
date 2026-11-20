@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict')
 const { execFileSync } = require('node:child_process')
-const { existsSync, readFileSync } = require('node:fs')
+const { chmodSync, existsSync, readFileSync, statSync } = require('node:fs')
 const path = require('node:path')
 const { test } = require('node:test')
 const vm = require('node:vm')
@@ -10,9 +10,16 @@ const root = path.join(__dirname, '../miniprogram')
 const template = './pages/moments/moments.wxml'
 const devToolsCompiler = '/Applications/wechatwebdevtools.app/Contents/Resources/app.asar.unpacked/node_modules/wcc-exec/wcc'
 const bundledCompiler = { darwin: 'mac/wcc', linux: 'linux/wcc', win32: 'windows/wcc.exe' }[process.platform]
-const compiler = process.env.WXML_COMPILER ||
-  (process.platform === 'darwin' && existsSync(devToolsCompiler) ? devToolsCompiler :
-    bundledCompiler && require.resolve(`miniprogram-compiler/bin/${bundledCompiler}`))
+let compiler = process.env.WXML_COMPILER
+if (!compiler && process.platform === 'darwin' && existsSync(devToolsCompiler)) compiler = devToolsCompiler
+if (!compiler && bundledCompiler) {
+  compiler = require.resolve(`miniprogram-compiler/bin/${bundledCompiler}`)
+  // npm can unpack the bundled binaries without their executable bit.
+  if (process.platform !== 'win32') {
+    const mode = statSync(compiler).mode & 0o777
+    if ((mode & 0o100) === 0) chmodSync(compiler, mode | 0o100)
+  }
+}
 assert.ok(compiler, 'Set WXML_COMPILER to the path of a WeChat WXML compiler')
 const context = vm.createContext({ window: {}, console })
 vm.runInContext(execFileSync(compiler, [template], { cwd: root, encoding: 'utf8' }), context)
