@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "miniprogram-api-typings": "3.12.3",
+    "miniprogram-compiler": "0.2.3",
     "typescript": "5.4.5"
   }
 }
