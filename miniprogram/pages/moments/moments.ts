@@ -3,6 +3,7 @@
 import {
   listMomentsPage,
   MomentsPage,
+  MomentsCursor,
   getIdentity,
   getCouple,
   getOnThisDayMoments,
@@ -14,27 +15,44 @@ import {
 } from '../../services/store'
 import { MOMENT_TAG_FILTERS, tagLabel } from '../../utils/tags'
 import { Moment, MomentTag } from '../../services/types'
-import { ensureCloudReady } from '../../services/page-boot'
-import { getAppInstance } from '../../app'
+import { ensureCloudReadyState } from '../../services/page-boot'
 import {
   buildTimelineRows,
   scenesFromMoments,
   SceneVO,
   TimelineRow,
+  withoutFailedPreview,
 } from '../../utils/moments-timeline'
 import { MapPlace, MapCityStat } from '../../services/types'
 import {
   consumeMomentsListStale,
+  peekMomentsListStale,
   consumeMomentsScrollTop,
   saveMomentsScrollTop,
 } from '../../services/moments-list-state'
-import { feedCacheKey, takePrefetchedFeed } from '../../services/moments-feed-cache'
+import { feedCacheKey, invalidateMomentsFeedPrefetch, takePrefetchedFeed } from '../../services/moments-feed-cache'
 import { getThemeStyle, getThemeId, syncTheme } from '../../services/theme'
 import { takeMomentsContext } from '../../services/moments-list-state'
 
 const PAGE_SIZE = 20
+const RECAP_PREVIEW_SIZE = 6
 
 type ViewMode = 'timeline' | 'map' | 'collections' | 'recap'
+
+type RecapStats = {
+  total: number
+  countA: number
+  countB: number
+  placeCount: number
+  topTag: string
+  percentA: number
+  percentB: number
+}
+
+type RecapSnapshot = {
+  recapStats: RecapStats
+  recapMemories: SceneVO[]
+}
 
 type CollectionTagVO = {
   key: string
@@ -64,6 +82,14 @@ function collectionDecor(key: string): { icon: string; tone: string } {
   return { icon: '♡', tone: 'default' }
 }
 
+function unseenMoments(items: Moment[], seen: Set<string>): Moment[] {
+  return items.filter(item => {
+    if (seen.has(item.id)) return false
+    seen.add(item.id)
+    return true
+  })
+}
+
 Page({
   data: {
     themeStyle: getThemeStyle(),
@@ -72,10 +98,13 @@ Page({
     rows: [] as TimelineRow[],
     onThisDay: [] as SceneVO[],
     empty: true,
+    feedLoaded: false,
+    bootState: 'checking' as 'checking' | Awaited<ReturnType<typeof ensureCloudReadyState>>,
     loading: false,
     loadError: '',
     loadingMore: false,
-    hasMore: true,
+    loadMoreError: '',
+    hasMore: false,
     skip: 0,
     total: 0,
     filterTag: '' as MomentTag | '',
@@ -99,15 +128,7 @@ Page({
     recapYear: new Date().getFullYear(),
     recapMonth: new Date().getMonth() + 1,
     recapMonths: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-    recapStats: null as {
-      total: number
-      countA: number
-      countB: number
-      placeCount: number
-      topTag: string
-      percentA: number
-      percentB: number
-    } | null,
+    recapStats: null as RecapStats | null,
     collectionTagTotal: 0,
     collectionPlaceTotal: 0,
     collections: { tags: [] as CollectionTagVO[], places: [] as CollectionPlaceVO[] } as CollectionsVO,
@@ -123,31 +144,40 @@ Page({
 
   mapLoaded: false,
   feedRevision: 0,
-  recapRevision: 0,
   secondaryRevision: 0,
   loadedQueryKey: '',
+  nextCursor: undefined as MomentsCursor | null | undefined,
   rawMoments: [] as Moment[],
   lastRefreshedAt: 0,
-  likePending: new Set<string>(),
+  likePending: new Map<string, boolean>(),
+  likeRevision: 0,
+  likeOwner: '',
+  detailChannel: null as WechatMiniprogram.EventChannel | null,
+  confirmedLikes: new Map<string, { likedByMe: boolean; likeCount: number; revision: number }>(),
   collectionsLoaded: false,
-  recapCache: {} as Record<
-    string,
-    {
-      total: number
-      countA: number
-      countB: number
-      placeCount: number
-      topTag: string
-      percentA: number
-      percentB: number
-    }
-  >,
+  recapCache: {} as Partial<Record<string, RecapSnapshot>>,
+  recapRequests: {} as Partial<Record<string, Promise<RecapSnapshot>>>,
+
+  checkingSession: false,
 
   async onShow() {
     syncTheme(this)
     this.setData({ themeId: getThemeId() })
-    await getAppInstance().waitBoot()
-    if (!(await ensureCloudReady())) return
+    await this.loadPage()
+  },
+
+  async loadPage() {
+    if (this.checkingSession || this.data.bootState === 'redirecting') return
+    this.checkingSession = true
+    if (peekMomentsListStale()) this.feedRevision++
+    if (this.data.bootState !== 'ready') this.setData({ bootState: 'checking' })
+    const state = await ensureCloudReadyState().finally(() => { this.checkingSession = false })
+    if (state === 'offline') {
+      this.setData({ bootState: state, loading: false, loadingMore: false, loadError: '暂时连不上，请稍后重试' })
+      return
+    }
+    this.setData({ bootState: state })
+    if (state === 'redirecting') return
     const stale = consumeMomentsListStale()
     const context = takeMomentsContext()
     if (context) this.setData({
@@ -155,10 +185,18 @@ Page({
       contextLabel: context.label, dateYear: 0, dateMonth: 0, filterTag: '', searchActive: false, searchKeyword: '', submittedKeyword: '',
     })
     if (stale) this.invalidateSecondaryViews()
-    const startYear = Number(getCouple()?.startDate.slice(0, 4)) || new Date().getFullYear()
+    const couple = getCouple()
+    const likeOwner = this.currentLikeOwner()
+    if (likeOwner !== this.likeOwner) {
+      this.likeOwner = likeOwner
+      this.likePending = new Map()
+      this.confirmedLikes.clear()
+      this.detailChannel = null
+    }
+    const startYear = Number(couple?.startDate.slice(0, 4)) || new Date().getFullYear()
     const currentYear = new Date().getFullYear()
     this.setData({ myRole: getIdentity().role, recapYears: Array.from({ length: Math.max(1, currentYear - startYear + 1) }, (_, index) => currentYear - index) })
-    if (context || stale || this.data.rows.length === 0 || Date.now() - this.lastRefreshedAt > 15000) {
+    if (context || stale || this.data.loadError || this.data.rows.length === 0 || Date.now() - this.lastRefreshedAt > 15000) {
       await this.refresh(this.data.rows.length > 0)
       this.invalidateSecondaryViews()
       if (this.data.viewMode === 'map') await this.loadMap()
@@ -168,11 +206,17 @@ Page({
     this.restoreScrollTop()
   },
 
-  invalidateSecondaryViews() {
+  invalidateSecondaryViews(preserveRecap = false) {
     this.secondaryRevision++
     this.mapLoaded = false
     this.collectionsLoaded = false
-    this.recapCache = {}
+    const key = `${this.data.recapYear}-${this.data.recapMonth}`
+    const cached = preserveRecap ? this.recapCache[key] : undefined
+    this.recapCache = cached ? { [key]: cached } : {}
+    this.recapRequests = {}
+    if (this.data.viewMode === 'recap') {
+      this.setData({ recapStats: cached?.recapStats ?? null, recapMemories: cached?.recapMemories ?? [], recapLoading: true, secondaryError: '' })
+    }
   },
 
   onPageScroll(e: WechatMiniprogram.Page.IPageScrollOption) {
@@ -180,16 +224,37 @@ Page({
   },
 
   async onPullDownRefresh() {
-    this.invalidateSecondaryViews()
-    await this.refresh()
-    if (this.data.viewMode === 'map') await this.loadMap()
-    if (this.data.viewMode === 'collections') await this.loadCollections()
-    if (this.data.viewMode === 'recap') await this.loadRecap()
-    wx.stopPullDownRefresh()
+    try {
+      if (this.data.bootState !== 'ready') {
+        await this.loadPage()
+        return
+      }
+      if (this.data.viewMode === 'recap') {
+        this.invalidateSecondaryViews(true)
+        await this.loadRecap()
+        return
+      }
+      this.invalidateSecondaryViews()
+      const { viewMode, filterTag, submittedKeyword, locationName, locationKey, dateYear, dateMonth } = this.data
+      const defaultTimeline = viewMode === 'timeline' && !filterTag && !locationName && !locationKey && !dateYear && !dateMonth
+      const feedRefresh = this.refresh(defaultTimeline || Boolean(submittedKeyword))
+      const revision = this.secondaryRevision
+      await feedRefresh
+      if (revision !== this.secondaryRevision) return
+      if (this.data.viewMode === 'map') await this.loadMap()
+      if (this.data.viewMode === 'collections') await this.loadCollections()
+    } finally {
+      wx.stopPullDownRefresh()
+    }
   },
 
   async onReachBottom() {
-    if (this.data.viewMode !== 'timeline') return
+    if (this.data.viewMode !== 'timeline' || this.data.bootState !== 'ready') return
+    await this.onRetryMore()
+  },
+
+  async onRetryMore() {
+    if (this.data.viewMode !== 'timeline' || this.data.bootState !== 'ready') return
     if (!this.data.hasMore || this.data.loading || this.data.loadingMore) return
     await this.loadMore()
   },
@@ -205,14 +270,14 @@ Page({
       if (!this.collectionsLoaded) this.loadCollections()
     } else if (mode === 'recap') {
       this.loadRecap()
-    } else if (this.data.rows.length === 0) {
+    } else if (!this.data.loading && !this.data.feedLoaded) {
       this.refresh()
     }
   },
 
   onPickFilter(e: WechatMiniprogram.BaseEvent) {
     const filterTag = (e.currentTarget.dataset.key ?? '') as MomentTag | ''
-    this.setData({ filterTag, searchActive: false, searchKeyword: '', submittedKeyword: '' })
+    this.setData({ filterTag })
     this.refresh()
   },
 
@@ -280,6 +345,7 @@ Page({
 
   async refresh(preserve = false) {
     const revision = ++this.feedRevision
+    const likeRevision = this.likeRevision
     const options = {
       tag: this.data.filterTag || undefined,
       keyword: this.data.submittedKeyword || undefined,
@@ -288,42 +354,54 @@ Page({
     }
     const queryKey = JSON.stringify(options)
     const sameQuery = queryKey === this.loadedQueryKey
-    const targetCount = preserve && sameQuery ? Math.max(PAGE_SIZE, this.data.skip) : PAGE_SIZE
+    const targetCount = preserve && sameQuery ? Math.max(PAGE_SIZE, this.rawMoments.length) : PAGE_SIZE
     if (this.data.viewMode === 'timeline') this.secondaryRevision++
     if (!sameQuery) {
       this.rawMoments = []
-      this.setData({ rows: [], onThisDay: [], empty: true, skip: 0, total: 0, hasMore: false })
+      this.nextCursor = undefined
+      this.setData({ rows: [], onThisDay: [], empty: true, feedLoaded: false, skip: 0, total: 0, hasMore: false })
     }
-    this.setData({ loading: true, loadingMore: false, loadError: '' })
+    this.setData({ loading: true, loadingMore: false, loadError: '', loadMoreError: '' })
     try {
       const myRole = getIdentity().role
       const key = feedCacheKey({
         tag: this.data.filterTag || '',
         keyword: this.data.submittedKeyword,
       })
-      const prefetched = options.locationName || options.locationKey || options.year ? null : await takePrefetchedFeed<MomentsPage>(key)
-      const page = prefetched ?? await listMomentsPage({ ...options, limit: PAGE_SIZE, skip: 0 })
+      const filteredByContext = options.locationName || options.locationKey || options.year
+      if (filteredByContext) invalidateMomentsFeedPrefetch()
+      const prefetched = filteredByContext ? null : await takePrefetchedFeed<MomentsPage>(key)
       if (revision !== this.feedRevision) return
-      while (page.hasMore && page.items.length < targetCount) {
-        const more = await listMomentsPage({ ...options, limit: PAGE_SIZE, skip: page.items.length })
+      // Exact coordinate matching runs after the database query and uses offsets.
+      let page = prefetched ?? await listMomentsPage({
+        ...options, limit: PAGE_SIZE, skip: 0, cursor: options.locationKey ? undefined : null,
+      })
+      if (revision !== this.feedRevision) return
+      const total = page.total
+      const seen = new Set<string>()
+      const items = unseenMoments(page.items, seen)
+      let skip = page.items.length
+      while (page.hasMore && page.items.length && items.length < targetCount) {
+        page = await listMomentsPage({ ...options, limit: PAGE_SIZE, skip, cursor: page.nextCursor })
         if (revision !== this.feedRevision) return
-        page.items.push(...more.items)
-        page.hasMore = more.hasMore
-        if (!more.items.length) break
+        skip += page.items.length
+        items.push(...unseenMoments(page.items, seen))
       }
       this.loadedQueryKey = queryKey
-      this.rawMoments = page.items
-      const rows = buildTimelineRows(page.items, page.total, 0, myRole, this.coupleStartDate())
+      this.nextCursor = page.nextCursor
+      this.rawMoments = this.reconcileFeedLikes(items, likeRevision)
+      const rows = buildTimelineRows(this.rawMoments.map(item => this.withPendingLike(item)), total, 0, myRole, this.coupleStartDate())
       this.setData({
         rows,
         empty: rows.length === 0,
-        hasMore: page.hasMore,
-        skip: page.items.length,
-        total: page.total,
+        feedLoaded: true,
+        hasMore: page.hasMore && page.items.length > 0,
+        skip,
+        total,
         loadError: '',
       })
       this.lastRefreshedAt = Date.now()
-      this.setData({ briefStats: { ...this.data.briefStats, total: page.total } })
+      this.setData({ briefStats: { ...this.data.briefStats, total } })
       void getMomentsBriefStats().then(brief => {
         if (revision === this.feedRevision) this.setData({ briefStats: brief })
       }).catch(() => undefined)
@@ -343,11 +421,13 @@ Page({
     }
   },
 
-  onRetry() {
-    this.refresh()
+  async onRetry() {
+    if (this.data.bootState !== 'ready') return this.loadPage()
+    if (!this.data.loading) await this.refresh(true)
   },
 
   onRetrySecondary() {
+    if (this.data.bootState !== 'ready') return this.loadPage()
     if (this.data.viewMode === 'map') void this.loadMap()
     if (this.data.viewMode === 'collections') void this.loadCollections()
     if (this.data.viewMode === 'recap') void this.loadRecap()
@@ -355,37 +435,44 @@ Page({
 
   async loadMore() {
     const revision = this.feedRevision
-    this.setData({ loadingMore: true })
+    const likeRevision = this.likeRevision
+    this.setData({ loadingMore: true, loadMoreError: '' })
     try {
       const myRole = getIdentity().role
       const page = await listMomentsPage({
         limit: PAGE_SIZE,
         skip: this.data.skip,
+        cursor: this.nextCursor,
         tag: this.data.filterTag || undefined,
         keyword: this.data.submittedKeyword || undefined,
         locationName: this.data.locationName || undefined, locationKey: this.data.locationKey || undefined,
         year: this.data.dateYear || undefined, month: this.data.dateMonth || undefined,
       })
       if (revision !== this.feedRevision) return
-      this.rawMoments.push(...page.items)
-      const previousDate = this.rawMoments[this.rawMoments.length - page.items.length - 1]?.momentDate || ''
+      const previousDate = this.rawMoments[this.rawMoments.length - 1]?.momentDate || ''
+      const seen = new Set(this.rawMoments.map(item => item.id))
+      const items = this.reconcileFeedLikes(unseenMoments(page.items, seen), likeRevision)
+      const rowOffset = this.rawMoments.length
+      this.rawMoments.push(...items)
+      this.nextCursor = page.nextCursor
       const [previousYear, previousMonth] = previousDate.split('-')
       const moreRows = buildTimelineRows(
-        page.items,
+        items.map(item => this.withPendingLike(item)),
         this.data.total,
-        this.data.skip,
+        rowOffset,
         myRole,
         this.coupleStartDate(),
         previousDate ? `${previousYear}-${Number(previousMonth)}` : '',
       )
       this.setData({
         rows: [...this.data.rows, ...moreRows],
-        hasMore: page.hasMore,
+        hasMore: page.hasMore && page.items.length > 0,
         skip: this.data.skip + page.items.length,
       })
     } catch (err) {
       if (revision !== this.feedRevision) return
       const msg = err instanceof Error ? err.message : '加载更多失败'
+      this.setData({ loadMoreError: msg })
       wx.showToast({ title: msg, icon: 'none' })
     } finally {
       if (revision === this.feedRevision) this.setData({ loadingMore: false })
@@ -501,38 +588,73 @@ Page({
     }
   },
 
-  async loadRecap() {
-    const revision = ++this.recapRevision
-    const secondaryRevision = ++this.secondaryRevision
-    this.setData({ recapLoading: true, secondaryError: '', recapStats: null, recapMemories: [] })
-    const key = `${this.data.recapYear}-${this.data.recapMonth}`
-    const cached = this.recapCache[key]
-    try {
-      const [stats, page] = await Promise.all([
-        cached ? Promise.resolve(cached) : getMomentsStats(this.data.recapYear, this.data.recapMonth),
-        listMomentsPage({ limit: 6, year: this.data.recapYear, month: this.data.recapMonth }),
-      ])
-      if (revision !== this.recapRevision || secondaryRevision !== this.secondaryRevision || this.data.viewMode !== 'recap') return
-      const total = Math.max(0, stats.total)
-      const percentA = total > 0 ? Math.min(100, Math.round((stats.countA / total) * 100)) : 0
-      const vo = {
-        total,
-        countA: stats.countA,
-        countB: stats.countB,
-        placeCount: stats.placeCount,
-        topTag: cached ? cached.topTag : stats.topTag ? tagLabel(stats.topTag as MomentTag) : '—',
-        percentA,
-        percentB: total > 0 ? Math.max(0, 100 - percentA) : 0,
+  async requestRecap(year: number, month: number): Promise<RecapSnapshot> {
+    const key = `${year}-${month}`
+    const requests = this.recapRequests
+    const role = this.data.myRole
+    const request = Promise.all([
+      getMomentsStats(year, month),
+      listMomentsPage({ limit: RECAP_PREVIEW_SIZE, year, month }),
+    ]).then(([stats, page]) => {
+      const total = stats.total
+      if (total !== page.total || page.items.length !== Math.min(total, RECAP_PREVIEW_SIZE)) {
+        throw new Error('本月回忆有更新，请重试')
       }
-      this.recapCache[key] = vo
-      this.setData({ recapStats: vo, recapMemories: scenesFromMoments(page.items, page.total, 0, getIdentity().role) })
-    } catch (err) {
-      if (revision !== this.recapRevision || secondaryRevision !== this.secondaryRevision || this.data.viewMode !== 'recap') return
-      const msg = err instanceof Error ? err.message : '回顾加载失败'
-      wx.showToast({ title: msg, icon: 'none' })
-      this.setData({ secondaryError: msg })
+      const percentA = total > 0 ? Math.min(100, Math.round((stats.countA / total) * 100)) : 0
+      return {
+        recapStats: {
+          total,
+          countA: stats.countA,
+          countB: stats.countB,
+          placeCount: stats.placeCount,
+          topTag: stats.topTag ? tagLabel(stats.topTag as MomentTag) : '—',
+          percentA,
+          percentB: total > 0 ? Math.max(0, 100 - percentA) : 0,
+        },
+        recapMemories: scenesFromMoments(page.items, total, 0, role),
+      }
+    })
+    requests[key] = request
+    try {
+      const snapshot = await request
+      if (this.recapRequests === requests && requests[key] === request) this.recapCache[key] = snapshot
+      return snapshot
     } finally {
-      if (revision === this.recapRevision && secondaryRevision === this.secondaryRevision) this.setData({ recapLoading: false })
+      if (requests[key] === request) delete requests[key]
+    }
+  },
+
+  warmRecapNeighbors(year: number, month: number) {
+    for (const offset of [-1, 1]) {
+      const date = new Date(year, month - 1 + offset, 1)
+      const neighborYear = date.getFullYear()
+      const neighborMonth = date.getMonth() + 1
+      const key = `${neighborYear}-${neighborMonth}`
+      if (!this.data.recapYears.includes(neighborYear) || this.recapCache[key] || this.recapRequests[key]) continue
+      void this.requestRecap(neighborYear, neighborMonth).catch(() => {})
+    }
+  },
+
+  async loadRecap() {
+    const revision = ++this.secondaryRevision
+    const { recapYear: year, recapMonth: month } = this.data
+    const cached = this.recapCache[`${year}-${month}`]
+    this.setData({
+      recapLoading: true, secondaryError: '',
+      recapStats: cached?.recapStats ?? null, recapMemories: cached?.recapMemories ?? [],
+    })
+    try {
+      const snapshot = await this.requestRecap(year, month)
+      if (revision !== this.secondaryRevision || this.data.viewMode !== 'recap') return
+      this.setData({ ...snapshot, recapLoading: false })
+      this.warmRecapNeighbors(year, month)
+    } catch (err) {
+      if (revision !== this.secondaryRevision || this.data.viewMode !== 'recap') return
+      const msg = err instanceof Error ? err.message : '请稍后重试'
+      this.setData({
+        recapLoading: false,
+        secondaryError: cached ? `更新失败：${msg}。当前显示该月缓存` : `回顾加载失败：${msg}`,
+      })
     }
   },
 
@@ -544,50 +666,135 @@ Page({
     }, 0)
   },
 
+  currentLikeOwner(): string {
+    try {
+      const { openid, role } = getIdentity()
+      return JSON.stringify([openid, role, getCouple()?.id])
+    } catch {
+      return ''
+    }
+  },
+
   onTapScene(e: WechatMiniprogram.BaseEvent) {
     const id = e.currentTarget.dataset.id as string
     const tag = this.data.filterTag || ''
     const q = tag ? `&tag=${tag}` : ''
-    wx.navigateTo({ url: `/pages/moment-detail/moment-detail?id=${id}${q}` })
+    const owner = this.likeOwner
+    let channel: WechatMiniprogram.EventChannel | undefined
+    wx.navigateTo({
+      url: `/pages/moment-detail/moment-detail?id=${id}${q}`,
+      success: ({ eventChannel }) => {
+        channel = eventChannel
+        if (this.likeOwner === owner) this.detailChannel = channel
+      },
+      events: {
+        momentLikeChanged: (momentId: string, likedByMe: boolean, likeCount: number) => {
+          if (this.likeOwner === owner && this.currentLikeOwner() === owner) this.confirmSceneLike(momentId, likedByMe, likeCount)
+        },
+        momentDetailClosed: () => {
+          if (this.detailChannel === channel) this.detailChannel = null
+        },
+      },
+    })
+  },
+
+  onPreviewError(e: WechatMiniprogram.BaseEvent) {
+    const { surface, id, src } = e.currentTarget.dataset
+    if (typeof src !== 'string' || !src) return
+    if (surface === 'recap' || surface === 'onThisDay') {
+      const field = surface === 'recap' ? 'recapMemories' : 'onThisDay'
+      const index = this.data[field].findIndex(scene => scene.id === id)
+      const scene = this.data[field][index]
+      // An error for an older cover must not remove the current cover.
+      if (scene?.coverUrl !== src) return
+      const updated = withoutFailedPreview(scene, src)
+      this.setData({ [`${field}[${index}]`]: updated })
+      return
+    }
+    const index = this.data.rows.findIndex(row => row.type === 'moment' && row.scene.id === id)
+    const row = this.data.rows[index]
+    if (row?.type !== 'moment') return
+    const scene = withoutFailedPreview(row.scene, src)
+    if (scene !== row.scene) this.setData({ [`rows[${index}].scene`]: scene })
+  },
+
+  reconcileFeedLikes(items: Moment[], readRevision: number): Moment[] {
+    return items.map(item => {
+      const confirmed = this.confirmedLikes.get(item.id)
+      if (!confirmed) return item
+      if (confirmed.revision <= readRevision) {
+        this.confirmedLikes.delete(item.id)
+        return item
+      }
+      return { ...item, likedByMe: confirmed.likedByMe, likeCount: confirmed.likeCount }
+    })
+  },
+
+  withPendingLike(item: Moment): Moment {
+    const desired = this.likePending.get(item.id)
+    if (desired === undefined || desired === Boolean(item.likedByMe)) return item
+    return { ...item, likedByMe: desired, likeCount: Math.max(0, (item.likeCount ?? 0) + (desired ? 1 : -1)) }
+  },
+
+  updateVisibleLike(id: string, likedByMe: boolean, likeCount: number) {
+    const index = this.data.rows.findIndex(row => row.type === 'moment' && row.scene.id === id)
+    if (index < 0) return
+    this.setData({ [`rows[${index}].scene.likedByMe`]: likedByMe, [`rows[${index}].scene.likeCount`]: likeCount })
+  },
+
+  confirmSceneLike(id: string, likedByMe: boolean, likeCount: number) {
+    this.confirmedLikes.set(id, { likedByMe, likeCount, revision: ++this.likeRevision })
+    const index = this.rawMoments.findIndex(item => item.id === id)
+    if (index >= 0) this.rawMoments[index] = { ...this.rawMoments[index], likedByMe, likeCount }
+    if (!this.likePending.has(id)) this.updateVisibleLike(id, likedByMe, likeCount)
   },
 
   async onToggleSceneLike(e: WechatMiniprogram.BaseEvent) {
     const id = e.currentTarget.dataset.id as string
-    const index = Number(e.currentTarget.dataset.index)
-    const row = this.data.rows[index]
-    if (!row || row.type !== 'moment' || row.scene.id !== id) return
-    if (this.likePending.has(id)) return
-    this.likePending.add(id)
+    const row = this.data.rows.find(row => row.type === 'moment' && row.scene.id === id)
+    if (row?.type !== 'moment' || this.likePending.has(id)) return
     const prevLiked = row.scene.likedByMe
     const prevCount = row.scene.likeCount
     const nextLiked = !prevLiked
-    this.setData({
-      [`rows[${index}].scene.likedByMe`]: nextLiked,
-      [`rows[${index}].scene.likeCount`]: Math.max(0, prevCount + (nextLiked ? 1 : -1)),
-    })
+    const { role } = getIdentity()
+    const owner = this.currentLikeOwner()
+    const pending = this.likePending
+    pending.set(id, nextLiked)
+    this.updateVisibleLike(id, nextLiked, Math.max(0, prevCount + (nextLiked ? 1 : -1)))
     wx.vibrateShort({ type: 'light' })
     try {
       const likes = await setMomentLike(id, nextLiked)
-      if (this.data.rows[index]?.key !== id) return
-      const liked = getIdentity().role === 'A' ? likes.likedByA : likes.likedByB
-      this.setData({
-        [`rows[${index}].scene.likedByMe`]: liked,
-        [`rows[${index}].scene.likeCount`]: likes.count,
-      })
+      pending.delete(id)
+      if (owner !== this.currentLikeOwner() || pending !== this.likePending) return
+      const liked = role === 'A' ? likes.likedByA : likes.likedByB
+      this.confirmSceneLike(id, liked, likes.count)
+      this.detailChannel?.emit('timelineLikeChanged', id, liked, likes.count)
     } catch (err) {
-      if (this.data.rows[index]?.key !== id) return
-      this.setData({
-        [`rows[${index}].scene.likedByMe`]: prevLiked,
-        [`rows[${index}].scene.likeCount`]: prevCount,
-      })
+      pending.delete(id)
+      if (owner !== this.currentLikeOwner() || pending !== this.likePending) return
+      const latest = this.rawMoments.find(item => item.id === id)
+      this.updateVisibleLike(id, latest ? Boolean(latest.likedByMe) : prevLiked, latest ? latest.likeCount ?? 0 : prevCount)
       const msg = err instanceof Error ? err.message : '操作失败'
       wx.showToast({ title: msg, icon: 'none' })
-    } finally {
-      this.likePending.delete(id)
     }
   },
 
   onTapCompose() {
     wx.navigateTo({ url: '/pages/compose/compose' })
+  },
+
+  onTapRecapCompose() {
+    const { recapYear, recapMonth } = this.data
+    const monthKey = `${recapYear}-${String(recapMonth).padStart(2, '0')}`
+    const startDate = getCouple()?.startDate ?? '1970-01-01'
+    // 按发布页和云端使用的 UTC+8 日历日判断所选月是否有可记日期。
+    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10)
+    const monthStart = `${monthKey}-01`
+    const firstAllowedDate = startDate > monthStart ? startDate : monthStart
+    if (!firstAllowedDate.startsWith(`${monthKey}-`) || firstAllowedDate > today) {
+      wx.showToast({ title: '该月没有可补记的日期，请选择其他月份', icon: 'none' })
+      return
+    }
+    wx.navigateTo({ url: `/pages/compose/compose?recapMonth=${monthKey}` })
   },
 })

@@ -1,8 +1,9 @@
 <view class="page" style="{{themeStyle}}">
   <text class="title">备份回忆</text>
   <text class="intro">备份文字、日期、地点、互动记录和已上传到云端的媒体文件。普通照片和视频可能在上传前经过压缩，不一定是手机相册原件。</text>
-  <view wx:if="{{!info}}" class="btn-action {{working ? 'is-disabled' : ''}}" bindtap="onStart">生成备份</view>
-  <view wx:if="{{info}}" class="btn-action btn-action--ghost {{working ? 'is-disabled' : ''}}" bindtap="onAbandon">放弃进度并重新开始</view>
+  <view wx:if="{{!info && !progressIssue}}" class="btn-action {{working ? 'is-disabled' : ''}}" bindtap="onStart">生成备份</view>
+  <view wx:if="{{progressIssue === 'invalid' || (info && !progressIssue)}}" class="btn-action btn-action--ghost {{working ? 'is-disabled' : ''}}" bindtap="onAbandon">{{progressIssue === 'invalid' ? '清除损坏的进度' : '放弃进度并重新开始'}}</view>
+  <view wx:if="{{progressIssue === 'read'}}" class="btn-action btn-action--ghost" bindtap="reloadProgress">重读备份进度</view>
   <text wx:if="{{hint}}" class="hint">{{hint}}</text>
   <text wx:if="{{error}}" class="error">{{error}}</text>
   <text wx:if="{{info}}" class="hint">已下载 {{nextPart}} / {{info.parts}} 卷；快照自创建起 24 小时有效。分享成功不代表已保存，请确认妥善保存后再删除本地包。</text>
@@ -12,17 +13,17 @@
       <text>{{item.name}}</text>
       <text wx:if="{{item.missing > 0}}" class="error">{{item.missing}} 个文件未能导出，详情见包内清单</text>
     </view>
-    <view class="save" data-index="{{index}}" bindtap="onSave">导出</view>
+    <view class="save" data-path="{{item.path}}" bindtap="onSave">导出</view>
   </view>
-  <view wx:if="{{info && !progressBlocked && nextPart < info.parts}}" class="btn-action btn-action--ghost {{working ? 'is-disabled' : ''}}" bindtap="onContinue">{{working ? '生成中…' : '下载下一包'}}</view>
-  <text wx:if="{{info && !progressBlocked && nextPart === info.parts}}" class="hint">所有卷已处理；请确认各卷已导出并妥善保存。</text>
+  <view wx:if="{{info && !progressIssue && !progressBlocked && nextPart < info.parts}}" class="btn-action btn-action--ghost {{working ? 'is-disabled' : ''}}" bindtap="onContinue">{{working ? '生成中…' : '下载下一包'}}</view>
+  <text wx:if="{{info && !progressIssue && !progressBlocked && nextPart === info.parts}}" class="hint">所有卷已处理；请确认各卷已导出并妥善保存。</text>
   <view class="summary">管理小程序内的备份包</view>
   <text class="hint">这里包括以前下载的备份。导出并确认保存，或确定不再需要后，可逐个删除以释放空间；不会删除已导出的文件。</text>
   <text wx:if="{{cleanupError}}" class="error" bindtap="refreshLocalPackages">{{cleanupError}}，点击重试</text>
   <text wx:if="{{!localPackages.length && !cleanupError}}" class="hint">暂无本地备份包</text>
   <view class="package" wx:for="{{localPackages}}" wx:key="path">
     <text class="package-copy">{{item.name}}</text>
-    <view class="save" data-index="{{index}}" bindtap="onSaveLocal">导出</view>
-    <view class="save" data-index="{{index}}" bindtap="onDeleteLocal">删除</view>
+    <view class="save" data-path="{{item.path}}" bindtap="onSaveLocal">导出</view>
+    <view class="save" data-path="{{item.path}}" bindtap="onDeleteLocal">删除</view>
   </view>
 </view>

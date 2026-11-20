@@ -218,6 +218,12 @@
   color: rgba(255, 255, 255, 0.8);
   font-size: 23rpx;
 }
+.story-card__retry {
+  padding: 12rpx 18rpx;
+  border: 1rpx solid rgba(255, 255, 255, 0.45);
+  border-radius: 8rpx;
+  color: #FFFFFF;
+}
 .story-card__placeholder-mark {
   color: #FFFFFF;
   font-size: 48rpx;

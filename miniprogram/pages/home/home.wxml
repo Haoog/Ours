@@ -19,10 +19,11 @@
     <text class="memory-prompt__action">记录 →</text>
   </view>
 
-  <view class="ann card-soft" wx:if="{{nextAnn}}" bindtap="onTapAnniversary">
+  <view class="ann card-soft" wx:if="{{nextAnn || annError}}" bindtap="onTapAnniversary">
     <text class="ann__label">下个纪念日</text>
-    <text class="ann__title">{{nextAnn.title}}</text>
-    <text class="ann__sub">{{nextAnn.label}} · 查看全部 →</text>
+    <text wx:if="{{nextAnn}}" class="ann__title">{{nextAnn.title}}</text>
+    <text wx:if="{{annError}}" class="ann__sub">{{nextAnn ? '更新失败，显示上次结果' : '加载失败'}} · 点击重试</text>
+    <text wx:else class="ann__sub">{{nextAnn.label}} · 查看全部 →</text>
   </view>
 
   <view class="recent">
@@ -44,7 +45,7 @@
               <text wx:if="{{item.hasVideo}}" class="recent-card__placeholder-icon">▶</text>
               <text>{{item.hasVideo ? '视频记录' : item.mediaTag || item.caption || '…'}}</text>
             </view>
-            <view wx:if="{{item.hasVideo}}" class="recent-card__media-badge">视频</view>
+            <view wx:if="{{item.mediaTag && (item.cover || item.hasVideo)}}" class="recent-card__media-badge">{{item.mediaTag}}</view>
             <view wx:if="{{item.cover && item.hasVideo}}" class="recent-card__play">▶</view>
           </view>
           <view class="recent-card__body">
@@ -93,4 +94,9 @@
     <view class="fab-sticker">+</view>
   </view>
 
+</view>
+<view wx:elif="{{recentError}}" class="page grain" style="{{themeStyle}}">
+  <view class="recent">
+    <view class="recent__error" bindtap="onRetryRecent">{{recentError}} · 点击重试</view>
+  </view>
 </view>

@@ -5,6 +5,13 @@
     <text class="head__sub">可选过去的日期，补录以前的回忆</text>
   </view>
 
+  <view wx:if="{{draftLoading}}" class="media-hint">正在恢复草稿…</view>
+  <view wx:elif="{{editLoading}}" class="media-hint">正在加载回忆…</view>
+  <view wx:elif="{{editError}}" class="meta card-soft" bindtap="onRetryEdit">
+    <text>{{editError}}</text>
+    <text class="accent"> 重试</text>
+  </view>
+  <block wx:else>
   <view class="viewfinder card-soft">
     <textarea
       class="viewfinder__text"
@@ -17,7 +24,12 @@
       auto-height />
   </view>
 
-  <view wx:if="{{pendingResult}}" class="media-hint">保存结果待确认，请重试确认这一条回忆。</view>
+  <view wx:if="{{existingMomentId}}" class="media-hint">
+    <text>原回忆已发布，当前草稿中的修正仍保留在这里。</text>
+    <text class="accent" bindtap="onDiscardPublishCorrection"> 舍弃草稿</text>
+  </view>
+  <view wx:elif="{{pendingResult}}" class="media-hint">保存结果待确认，请重试确认这一条回忆。</view>
+  <view wx:elif="{{publishCorrection}}" class="media-hint">可以修改草稿。再次保存时会先确认原回忆是否已发布。</view>
   <view class="media-bar card-soft" wx:if="{{!editing && !pendingResult}}">
     <view class="media-bar__btn" bindtap="onPickAlbum">
       <text class="media-bar__icon">＋</text>
@@ -116,10 +128,13 @@
 
   <view class="actions">
     <view class="btn-action btn-action--ghost" hover-class="u-press" bindtap="onCancel">取消</view>
-    <view class="btn-action {{canPost && !posting ? '' : 'is-disabled'}}" hover-class="u-press" bindtap="onSubmit">
+    <view wx:if="{{existingMomentId}}" class="btn-action" hover-class="u-press" bindtap="onViewPublishedMoment">查看已发布回忆</view>
+    <view wx:else class="btn-action {{(canPost || pendingResult) && !posting ? '' : 'is-disabled'}}" hover-class="u-press" bindtap="onSubmit">
       {{posting ? '保存中…' : pendingResult ? '重试确认' : '保存'}}
     </view>
   </view>
+
+  </block>
 
   <view class="upload-mask" wx:if="{{posting}}">
     <view class="upload-panel card-soft">
@@ -129,7 +144,7 @@
         <view class="upload-bar__fill" style="width: {{uploadProgress}}%;"></view>
       </view>
       <text class="upload-panel__pct">{{uploadProgress}}%</text>
-      <view wx:if="{{!editing && uploadProgress < 98}}" class="upload-panel__cancel" hover-class="u-press" bindtap="onCancelUpload">取消上传</view>
+      <view wx:if="{{canCancelUpload}}" class="upload-panel__cancel" hover-class="u-press" bindtap="onCancelUpload">取消上传</view>
     </view>
   </view>
 

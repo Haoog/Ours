@@ -13,14 +13,12 @@ import {
   getMomentNeighbors,
 } from '../../services/store'
 import { MomentTag } from '../../services/types'
-import { ensureCloudReady } from '../../services/page-boot'
-import { getAppInstance } from '../../app'
+import { ensureCloudReadyState } from '../../services/page-boot'
 import { formatSlate } from '../../services/format'
 import { momentDisplayAt, isBackdatedMoment } from '../../utils/moment-time'
 import { MomentLivePhoto, MomentComment } from '../../services/types'
 import { tagLabel } from '../../utils/tags'
-import { resolveMomentImages, resolveMomentLivePhotos, toDisplayUrl } from '../../utils/media-url'
-import { invalidateCachedUrl } from '../../utils/cloud-url-cache'
+import { invalidateCachedUrl, peekCachedUrl, resolveCloudUrls } from '../../utils/cloud-url-cache'
 import { markMomentsListStale } from '../../services/moments-list-state'
 import { getThemeStyle, syncTheme } from '../../services/theme'
 
@@ -30,6 +28,27 @@ const PRIVATE_SHARE_CARD = {
   imageUrl: '/assets/share-cover.png',
 }
 
+const MEDIA_ERROR = '部分媒体暂时没能加载，点此重试'
+
+interface MediaView {
+  src: string
+  key: number
+}
+
+interface MediaSource extends MediaView {
+  fileID: string
+  failed: boolean
+}
+
+interface MediaState {
+  revision: number
+  images: MediaSource[]
+  video: MediaSource
+  videoCover: MediaSource
+  livePhotos: { cover: MediaSource; video: string; duration: number }[]
+  retrying: boolean
+}
+
 interface DetailVO {
   id: string
   md: string
@@ -37,8 +56,8 @@ interface DetailVO {
   time: string
   content: string
   livePhotos: MomentLivePhoto[]
-  images: string[]
-  video: string
+  images: MediaView[]
+  videos: MediaView[]
   videoCover: string
   voiceFileID: string
   voiceDuration: number
@@ -59,6 +78,21 @@ interface CommentVO {
   canDelete: boolean
 }
 
+interface CommentState {
+  momentId: string
+  changes: Map<string, CommentVO | null> | null
+  pendingDeletes: Set<string>
+  pendingSend?: { content: string; requestId: string; uncertain: boolean }
+  deletedDuringSubmit?: Set<string>
+}
+
+interface LikeState {
+  momentId: string
+  writeRevision: number
+  hasConfirmed: boolean
+  confirmed: { liked: boolean; likeCount: number }
+}
+
 Page({
   data: {
     themeStyle: getThemeStyle(),
@@ -67,6 +101,7 @@ Page({
     loadedImgs: {} as Record<string, boolean>,
     item: null as DetailVO | null,
     comments: [] as CommentVO[],
+    commentsStatus: 'loading' as 'loading' | 'ready' | 'empty' | 'error',
     commentDraft: '',
     commentSubmitting: false,
     likeCount: 0,
@@ -78,6 +113,7 @@ Page({
     navTotal: 0,
     loadError: '',
     interactionError: '',
+    likeUnavailable: false,
     mediaError: '',
     canEdit: false,
     liking: false,
@@ -89,34 +125,92 @@ Page({
   filterTag: '' as MomentTag | '',
   myRole: 'A' as 'A' | 'B',
   loadRevision: 0,
-  initialized: false,
+  mediaKey: 0,
+  mediaState: null as MediaState | null,
+  bootState: 'pending' as 'pending' | 'starting' | 'ready' | 'redirecting' | 'unloaded',
+  commentState: null as CommentState | null,
+  likeState: null as LikeState | null,
+  failedInteractions: { likes: false, neighbors: false },
+  openerChannel: null as WechatMiniprogram.EventChannel | null,
+  timelineLikeListener: null as ((id: string, liked: boolean, likeCount: number) => void) | null,
 
-  async onLoad(opt: Record<string, string>) {
-    syncTheme(this)
-    await getAppInstance().waitBoot()
-    if (!(await ensureCloudReady())) return
-
-    const id = opt.id
-    this.momentId = id
+  async onLoad(opt: Record<string, string | undefined>): Promise<void> {
+    this.momentId = opt.id ?? ''
     this.filterTag = (opt.tag ?? '') as MomentTag | ''
-    if (!id) {
-      this.setData({ found: false, loading: false })
+    this.bootState = 'pending'
+    this.openerChannel = this.getOpenerEventChannel?.() ?? null
+    this.timelineLikeListener = (id, liked, likeCount) => {
+      const state = this.likeState
+      if (!state || state.momentId !== id) return
+      state.writeRevision++
+      state.hasConfirmed = true
+      state.confirmed = { liked, likeCount }
+      this.setData({ likeUnavailable: false, ...(!this.data.liking ? state.confirmed : {}) })
+    }
+    this.openerChannel?.on('timelineLikeChanged', this.timelineLikeListener)
+    syncTheme(this)
+    if (!this.momentId) {
+      this.setData({ found: false, loading: false, loadError: '' })
+      return
+    }
+    return this.loadPage()
+  },
+
+  async onShow(): Promise<void> {
+    if (this.bootState === 'unloaded') return
+    syncTheme(this)
+    if (this.bootState === 'ready' && this.data.loading) return
+    return this.loadPage()
+  },
+
+  async loadPage(): Promise<void> {
+    if (!this.momentId) return
+    if (this.bootState === 'ready') return this.loadAll(this.momentId)
+    if (this.bootState !== 'pending') return
+
+    const revision = this.loadRevision
+    this.bootState = 'starting'
+    this.setData({ loading: true, loadError: '' })
+    const state = await ensureCloudReadyState().catch(() => 'offline')
+    if (revision !== this.loadRevision) return
+    if (state === 'redirecting') {
+      this.bootState = 'redirecting'
+      return
+    }
+    if (state === 'offline') {
+      this.bootState = 'pending'
+      this.setData({ found: false, loading: false, loadError: '暂时连不上，请稍后重试' })
       return
     }
     this.myRole = getIdentity().role
-    await this.loadAll(id)
-    this.initialized = true
-  },
-
-  async onShow() {
-    syncTheme(this)
-    if (this.initialized && !this.data.loading) await this.loadAll(this.momentId)
+    const opening = this.loadAll(this.momentId)
+    const openingRevision = this.loadRevision
+    await opening
+    if (openingRevision === this.loadRevision) this.bootState = 'ready'
   },
 
   async loadAll(id: string) {
     this.stopVoice()
     const revision = ++this.loadRevision
-    this.setData({ loading: true, loadedImgs: {}, loadError: '', interactionError: '' })
+    const resetComments = this.commentState?.momentId !== id
+    if (!this.commentState || resetComments) {
+      this.commentState = { momentId: id, changes: null, pendingDeletes: new Set() }
+    }
+    if (this.likeState?.momentId !== id) {
+      this.likeState = { momentId: id, writeRevision: 0, hasConfirmed: false, confirmed: { liked: false, likeCount: 0 } }
+      this.setData({ ...this.likeState.confirmed, liking: false })
+    }
+    const likeState = this.likeState
+    this.failedInteractions = { likes: false, neighbors: false }
+    const commentState = this.commentState
+    // 快照返回时合并本次加载期间完成的评论操作。
+    const changes = new Map<string, CommentVO | null>()
+    commentState.changes = changes
+    this.setData({
+      loading: true, loadError: '', interactionError: '',
+      likeUnavailable: !resetComments && this.data.likeUnavailable, commentsStatus: 'loading',
+      ...(resetComments ? { comments: [], commentDraft: '', commentSubmitting: false } : {}),
+    })
     try {
       const m = await getMoment(id)
       if (revision !== this.loadRevision) return
@@ -132,13 +226,18 @@ Page({
         ? '补记'
         : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 
-      const [images, livePhotos, video, videoCover] = await Promise.all([
-        isSystem ? Promise.resolve([]) : resolveMomentImages(m.images),
-        isSystem ? Promise.resolve([]) : resolveMomentLivePhotos(m.livePhotos ?? []),
-        !isSystem && m.videos?.[0] ? toDisplayUrl(m.videos[0]).catch(() => '') : Promise.resolve(''),
-        !isSystem && m.videoCover ? toDisplayUrl(m.videoCover).catch(() => '') : Promise.resolve(''),
-      ])
+      const source = (fileID: string): MediaSource => ({ fileID, src: '', key: 0, failed: !!fileID })
+      const media: MediaState = {
+        revision,
+        images: isSystem ? [] : m.images.map(source),
+        video: source(isSystem ? '' : m.videos?.[0] ?? ''),
+        videoCover: source(isSystem ? '' : m.videoCover ?? ''),
+        livePhotos: isSystem ? [] : (m.livePhotos ?? []).map(photo => ({ ...photo, cover: source(photo.cover) })),
+        retrying: false,
+      }
+      await this.resolveMedia(media)
       if (revision !== this.loadRevision) return
+      this.mediaState = media
 
       const item: DetailVO = {
         id: m.id,
@@ -146,15 +245,11 @@ Page({
         dow: slate.dow,
         time,
         content: m.content,
-        livePhotos,
-        images,
-        video,
-        videoCover,
+        ...this.mediaView(media),
         voiceFileID: m.voices?.[0]?.fileID ?? '',
         voiceDuration: m.voices?.[0]?.duration ?? 0,
         voicePlaying: false,
         voiceLoading: false,
-        imgCount: images.length,
         role: m.authorRole,
         author: m.authorRole === this.myRole ? '我' : 'TA',
         location: m.location?.name ?? '',
@@ -164,70 +259,189 @@ Page({
       this.setData({
         found: true, loading: false, item, canInteract: !isSystem,
         canEdit: !isSystem && m.authorRole === this.myRole,
-        comments: [], likeCount: 0, liked: false, prevId: '', nextId: '',
-        mediaError: images.length < m.images.length || (!video && !!m.videos?.length) || livePhotos.some(photo => !photo.cover)
-          ? '部分媒体暂时没能加载，点此重试' : '',
+        ...(isSystem ? { comments: [] } : {}),
+        prevId: '', nextId: '', navIndex: 0, navTotal: 0,
+        loadedImgs: {}, mediaError: this.mediaErrorText(media),
       })
 
-      let comments: CommentVO[] = []
-      let likeCount = 0
-      let liked = false
-      let prevId = ''
-      let nextId = ''
-      let navIndex = 0
-      let navTotal = 0
       if (!isSystem) {
-        const [commentsResult, likesResult, neighborsResult] = await Promise.allSettled([
-          listComments(id),
-          getMomentLikes(id),
-          getMomentNeighbors(id, this.filterTag || undefined),
+        await Promise.all([
+          this.loadComments(commentState, revision, changes),
+          this.loadInteractions(likeState, revision, { likes: true, neighbors: true }),
         ])
-        if (revision !== this.loadRevision) return
-        const clist = commentsResult.status === 'fulfilled' ? commentsResult.value : []
-        const likes = likesResult.status === 'fulfilled' ? likesResult.value : { likedByA: false, likedByB: false, count: 0 }
-        const neighbors = neighborsResult.status === 'fulfilled' ? neighborsResult.value : { prevId: null, nextId: null, index: 0, total: 0 }
-        this.setData({ interactionError: [commentsResult, likesResult, neighborsResult].some(result => result.status === 'rejected') ? '部分信息未加载，点此重试' : '' })
-        comments = clist.map((c: MomentComment) => ({
-          id: c.id,
-          content: c.content,
-          author: c.authorRole === this.myRole ? '我' : 'TA',
-          canDelete: c.authorRole === this.myRole,
-        }))
-        likeCount = likes.count
-        liked = this.myRole === 'A' ? likes.likedByA : likes.likedByB
-        prevId = neighbors.prevId ?? ''
-        nextId = neighbors.nextId ?? ''
-        navIndex = neighbors.index
-        navTotal = neighbors.total
       }
-
-      this.setData({
-        found: true,
-        loading: false,
-        item,
-        comments,
-        likeCount,
-        liked,
-        canInteract: !isSystem,
-        prevId,
-        nextId,
-        navIndex,
-        navTotal,
-      })
     } catch (err) {
       if (revision !== this.loadRevision) return
       this.setData({ found: false, loading: false, loadError: err instanceof Error ? err.message : '加载失败，请重试' })
+    } finally {
+      if (commentState.changes === changes) commentState.changes = null
     }
   },
 
+  async loadInteractions(state: LikeState, revision: number, requested: { likes: boolean; neighbors: boolean }) {
+    const isCurrent = () => revision === this.loadRevision && state === this.likeState
+    const failed = this.failedInteractions
+    const showFailures = () => {
+      if (!isCurrent()) return
+      this.setData({
+        interactionError: failed.likes || failed.neighbors ? '部分信息未加载，点此重试' : '',
+        likeUnavailable: (failed.likes || this.data.likeUnavailable) && !state.hasConfirmed,
+      })
+    }
+    const writeRevision = state.writeRevision
+    await Promise.all([
+      requested.likes && getMomentLikes(state.momentId).then(likes => {
+        if (!isCurrent() || writeRevision !== state.writeRevision) return
+        state.hasConfirmed = true
+        state.confirmed = { liked: this.myRole === 'A' ? likes.likedByA : likes.likedByB, likeCount: likes.count }
+        this.setData({ likeUnavailable: false, ...(!this.data.liking ? state.confirmed : {}) })
+      }).catch(() => {
+        if (!isCurrent() || writeRevision !== state.writeRevision) return
+        failed.likes = true
+        showFailures()
+      }),
+      requested.neighbors && getMomentNeighbors(state.momentId, this.filterTag || undefined).then(neighbors => {
+        if (!isCurrent()) return
+        this.setData({ prevId: neighbors.prevId ?? '', nextId: neighbors.nextId ?? '', navIndex: neighbors.index, navTotal: neighbors.total })
+      }).catch(() => {
+        failed.neighbors = true
+        showFailures()
+      }),
+    ])
+    showFailures()
+  },
+
+  async onRetryInteractions() {
+    const failed = this.failedInteractions
+    const state = this.likeState
+    if (!state || (!failed.likes && !failed.neighbors) || this.data.loading) return
+    const requested = { ...failed }
+    failed.likes = false
+    failed.neighbors = false
+    this.setData({ interactionError: '' })
+    await this.loadInteractions(state, this.loadRevision, requested)
+  },
+
+  async loadComments(state: CommentState, revision: number, changes: Map<string, CommentVO | null>) {
+    const isCurrent = () => revision === this.loadRevision && state === this.commentState && changes === state.changes
+    try {
+      const result = await listComments(state.momentId)
+      if (!isCurrent()) return
+      const snapshot = new Map(result.map(comment => [comment.id, this.toCommentVO(comment)]))
+      for (const [id, comment] of changes) {
+        if (comment) snapshot.set(id, comment)
+        else snapshot.delete(id)
+      }
+      for (const id of state.pendingDeletes) snapshot.delete(id)
+      this.setData({
+        comments: [...snapshot.values()],
+        commentsStatus: snapshot.size === 0 && state.pendingDeletes.size === 0 ? 'empty' : 'ready',
+      })
+    } catch {
+      if (isCurrent()) this.setData({ commentsStatus: 'error' })
+    } finally {
+      if (changes === state.changes) state.changes = null
+    }
+  },
+
+  async onRetryComments() {
+    const state = this.commentState
+    if (!state || this.data.loading || this.data.commentsStatus !== 'error' ||
+      !this.data.found || !this.data.canInteract || this.data.item?.id !== state.momentId) return
+    const changes = new Map<string, CommentVO | null>()
+    state.changes = changes
+    this.setData({ commentsStatus: 'loading' })
+    await this.loadComments(state, this.loadRevision, changes)
+  },
+
+  async resolveMedia(media: MediaState) {
+    const pending = [media.video, media.videoCover, ...media.images, ...media.livePhotos.map(photo => photo.cover)]
+      .filter(source => source.failed)
+    if (!pending.length) return
+    const fileIDs = [...new Set(pending.map(source => source.fileID))]
+    const urls = await resolveCloudUrls(fileIDs).catch((): Record<string, string> => ({}))
+    if (media.revision !== this.loadRevision) return
+    for (const source of pending) {
+      const src = urls[source.fileID]
+      if (!src) continue
+      source.src = src
+      source.key = ++this.mediaKey
+      source.failed = false
+    }
+  },
+
+  mediaView(media: MediaState) {
+    const view = ({ src, key }: MediaSource): MediaView => ({ src, key })
+    const images = media.images.filter(image => image.src).map(view)
+    return {
+      images,
+      imgCount: images.length,
+      videos: media.video.src ? [view(media.video)] : [],
+      videoCover: media.videoCover.src,
+      livePhotos: media.livePhotos.map(photo => ({ ...photo, cover: photo.cover.src })),
+    }
+  },
+
+  mediaErrorText(media: MediaState) {
+    return media.video.failed || media.images.some(image => !image.src || image.failed) ||
+      media.livePhotos.some(photo => !photo.cover.src) ? MEDIA_ERROR : ''
+  },
+
+  currentMedia() {
+    const media = this.mediaState
+    return media?.revision === this.loadRevision && this.data.found && this.data.item?.id === this.momentId ? media : null
+  },
+
   onImgLoad(e: WechatMiniprogram.BaseEvent) {
-    const src = e.currentTarget.dataset.src as string
-    if (!src || this.data.loadedImgs[src]) return
-    this.setData({ loadedImgs: { ...this.data.loadedImgs, [src]: true } })
+    const { key, src } = e.currentTarget.dataset
+    const image = this.currentMedia()?.images.find(image => image.key === key && image.src === src)
+    if (!image || image.failed || this.data.loadedImgs[key]) return
+    this.setData({ loadedImgs: { ...this.data.loadedImgs, [key]: true } })
+  },
+
+  onMediaError(e: WechatMiniprogram.ImageError | WechatMiniprogram.VideoError) {
+    const media = this.currentMedia()
+    if (!media) return
+    const { key, src } = e.currentTarget.dataset
+    const source = [media.video, ...media.images].find(source => source.key === key && source.src === src)
+    if (!source?.src || source.failed) return
+    source.failed = true
+    if (source.fileID.startsWith('cloud://') && peekCachedUrl(source.fileID) === src) {
+      invalidateCachedUrl(source.fileID)
+    }
+    const loadedImgs = { ...this.data.loadedImgs }
+    delete loadedImgs[key]
+    this.setData({ mediaError: MEDIA_ERROR, loadedImgs })
+  },
+
+  async onRetryMedia() {
+    const media = this.currentMedia()
+    if (!media || media.retrying || !this.data.mediaError) return
+    media.retrying = true
+    try {
+      await this.resolveMedia(media)
+      if (media !== this.currentMedia()) return
+      const { images, imgCount, videos, videoCover, livePhotos } = this.mediaView(media)
+      this.setData({
+        'item.images': images, 'item.imgCount': imgCount, 'item.videos': videos,
+        'item.videoCover': videoCover, 'item.livePhotos': livePhotos,
+        mediaError: this.mediaErrorText(media),
+      })
+    } finally {
+      media.retrying = false
+    }
   },
 
   onUnload() {
     this.loadRevision++
+    this.mediaState = null
+    this.commentState = null
+    this.likeState = null
+    this.bootState = 'unloaded'
+    if (this.timelineLikeListener) this.openerChannel?.off('timelineLikeChanged', this.timelineLikeListener)
+    this.openerChannel?.emit('momentDetailClosed')
+    this.openerChannel = null
+    this.timelineLikeListener = null
     this.stopVoice()
   },
 
@@ -235,8 +449,8 @@ Page({
     this.stopVoice()
   },
 
-  onRetry() {
-    void this.loadAll(this.momentId)
+  async onRetry(): Promise<void> {
+    return this.loadPage()
   },
 
   onTapEdit() {
@@ -276,7 +490,7 @@ Page({
     const src = e.currentTarget.dataset.src as string
     const item = this.data.item
     if (!item) return
-    wx.previewImage({ current: src, urls: item.images })
+    wx.previewImage({ current: src, urls: item.images.map(image => image.src) })
   },
 
   async onTapVoice() {
@@ -357,84 +571,129 @@ Page({
   },
 
   async onToggleLike() {
-    if (!this.data.canInteract || this.data.liking) return
-    const id = this.momentId
-    this.setData({ liking: true })
-    // 乐观更新：先即时反馈，失败再回滚
-    const prevLiked = this.data.liked
-    const prevCount = this.data.likeCount
-    const nextLiked = !prevLiked
-    this.setData({ liked: nextLiked, likeCount: Math.max(0, prevCount + (nextLiked ? 1 : -1)) })
+    const state = this.likeState
+    if (!state || this.data.item?.id !== state.momentId || !this.data.found || !this.data.canInteract || this.data.loading || this.data.liking || this.data.likeUnavailable) return
+    // 乐观更新：先即时反馈，失败时恢复最近确认的状态。
+    const initiator = this.openerChannel
+    const role = this.myRole
+    const nextLiked = !state.confirmed.liked
+    const likeCount = Math.max(0, state.confirmed.likeCount + (nextLiked ? 1 : -1))
+    this.setData({ liking: true, liked: nextLiked, likeCount })
     wx.vibrateShort({ type: 'light' })
     try {
-      const likes = await setMomentLike(id, nextLiked)
+      const likes = await setMomentLike(state.momentId, nextLiked)
       markMomentsListStale()
-      if (id !== this.momentId) return
-      const liked = this.myRole === 'A' ? likes.likedByA : likes.likedByB
-      this.setData({ liked, likeCount: likes.count })
+      const liked = role === 'A' ? likes.likedByA : likes.likedByB
+      initiator?.emit('momentLikeChanged', state.momentId, liked, likes.count)
+      if (state !== this.likeState) return
+      state.writeRevision++
+      state.hasConfirmed = true
+      if (this.data.likeUnavailable) this.setData({ likeUnavailable: false })
+      state.confirmed = { liked, likeCount: likes.count }
+      this.setData(state.confirmed)
     } catch (err) {
-      if (id !== this.momentId) return
-      this.setData({ liked: prevLiked, likeCount: prevCount })
+      if (state !== this.likeState) return
+      this.setData(state.confirmed)
       const msg = err instanceof Error ? err.message : '操作失败'
       wx.showToast({ title: msg, icon: 'none' })
     } finally {
-      this.setData({ liking: false })
+      if (state === this.likeState) this.setData({ liking: false })
+    }
+  },
+
+  toCommentVO(c: MomentComment): CommentVO {
+    return {
+      id: c.id,
+      content: c.content,
+      author: c.authorRole === this.myRole ? '我' : 'TA',
+      canDelete: c.authorRole === this.myRole,
     }
   },
 
   onCommentInput(e: WechatMiniprogram.Input) {
-    this.setData({ commentDraft: e.detail.value })
+    const state = this.commentState
+    if (!state || this.data.item?.id !== state.momentId) return
+    const commentDraft = e.detail.value
+    if (state.pendingSend && state.pendingSend.content !== commentDraft.trim()) state.pendingSend = undefined
+    this.setData({ commentDraft })
   },
 
   async onSubmitComment() {
-    if (this.data.commentSubmitting) return
+    const state = this.commentState
+    if (!state || this.data.item?.id !== state.momentId || !this.data.canInteract || this.data.commentSubmitting) return
     const content = this.data.commentDraft.trim()
     if (!content) return
+    const submission = state.pendingSend?.content === content ? state.pendingSend : {
+      content, requestId: `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`, uncertain: false,
+    }
+    state.pendingSend = submission
+    const deletedDuringSubmit = new Set<string>()
+    state.deletedDuringSubmit = deletedDuringSubmit
     this.setData({ commentSubmitting: true })
-    const momentId = this.momentId
     try {
-      const c = await addComment(momentId, content)
+      const c = await addComment(state.momentId, content, submission.requestId)
       markMomentsListStale()
-      if (momentId !== this.momentId) return
-      wx.vibrateShort({ type: 'light' })
-      // 直接追加，避免整页重载（评论/爱心/相邻都重拉）
-      const vo: CommentVO = {
-        id: c.id,
-        content: c.content,
-        author: c.authorRole === this.myRole ? '我' : 'TA',
-        canDelete: c.authorRole === this.myRole,
+      if (state !== this.commentState) return
+      if (state.pendingSend === submission) {
+        state.pendingSend = undefined
+        if (this.data.commentDraft.trim() === content) this.setData({ commentDraft: '' })
       }
-      this.setData({ commentDraft: '', comments: [...this.data.comments, vo] })
+      wx.vibrateShort({ type: 'light' })
+      if (state.pendingDeletes.has(c.id) || deletedDuringSubmit.has(c.id)) return
+      const vo = this.toCommentVO(c)
+      state.changes?.set(c.id, vo)
+      const comments = this.data.comments
+      if (!comments.some(comment => comment.id === c.id)) {
+        this.setData({
+          comments: [...comments, vo],
+          ...(this.data.commentsStatus === 'empty' ? { commentsStatus: 'ready' as const } : {}),
+        })
+      }
     } catch (err) {
-      if (momentId !== this.momentId) return
+      if (state !== this.commentState) return
+      if (!(err as { commentRejected?: boolean })?.commentRejected) submission.uncertain = true
+      // 先前结果不明时，本次拒绝无法排除之前已经写入。
+      if (!submission.uncertain && state.pendingSend === submission) state.pendingSend = undefined
       const msg = err instanceof Error ? err.message : '发送失败'
       wx.showToast({ title: msg, icon: 'none' })
     } finally {
-      this.setData({ commentSubmitting: false })
+      state.deletedDuringSubmit = undefined
+      if (state === this.commentState) this.setData({ commentSubmitting: false })
     }
   },
 
   onDeleteComment(e: WechatMiniprogram.BaseEvent) {
     const id = e.currentTarget.dataset.id as string
-    const momentId = this.momentId
+    const state = this.commentState
+    if (!state || this.data.item?.id !== state.momentId || !this.data.canInteract) return
     wx.showModal({
       title: '删除评论？',
       success: async res => {
-        if (!res.confirm || momentId !== this.momentId) return
+        if (!res.confirm || state !== this.commentState || state.pendingDeletes.has(id)) return
         const index = this.data.comments.findIndex(c => c.id === id)
         const removed = this.data.comments[index]
         if (!removed) return
+        state.pendingDeletes.add(id)
         this.setData({ comments: this.data.comments.filter(c => c.id !== id) })
         try {
           await deleteComment(id)
+          state.changes?.set(id, null)
+          state.deletedDuringSubmit?.add(id)
           markMomentsListStale()
         } catch (err) {
-          if (momentId !== this.momentId) return
+          if (state !== this.commentState) return
+          state.changes?.set(id, removed)
           const comments = [...this.data.comments]
           if (!comments.some(comment => comment.id === id)) comments.splice(Math.min(index, comments.length), 0, removed)
           this.setData({ comments })
           const msg = err instanceof Error ? err.message : '删除失败'
           wx.showToast({ title: msg, icon: 'none' })
+        } finally {
+          state.pendingDeletes.delete(id)
+          if (state === this.commentState && this.data.commentsStatus === 'ready' &&
+            this.data.comments.length === 0 && state.pendingDeletes.size === 0) {
+            this.setData({ commentsStatus: 'empty' })
+          }
         }
       },
     })

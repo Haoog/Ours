@@ -4,6 +4,12 @@
     <text class="head__sub">每年重复 · 首页显示最近一个倒计时</text>
   </view>
 
+  <view wx:if="{{loadError}}" class="refresh-status card-soft">
+    <text class="refresh-status__title">纪念日列表刷新失败</text>
+    <text wx:if="{{!empty}}" class="refresh-status__detail">正在显示上次加载的纪念日</text>
+    <button class="btn-action btn-action--ghost refresh-status__retry" disabled="{{loading}}" bindtap="onRetryRefresh">{{loading ? '刷新中…' : '重试刷新'}}</button>
+  </view>
+
   <view class="list" wx:if="{{!empty}}">
     <view class="item card-soft" wx:for="{{list}}" wx:key="id">
       <view class="item__main">
@@ -15,18 +21,18 @@
     </view>
   </view>
 
-  <view wx:elif="{{loading}}" class="empty-stage">加载纪念日…</view>
-  <view wx:elif="{{loadError}}" class="empty-stage" bindtap="refresh">{{loadError}} · 重试</view>
-  <view wx:else class="empty-stage">
+  <view wx:elif="{{loading && !loadError}}" class="empty-stage">加载纪念日…</view>
+  <view wx:elif="{{!loadError}}" class="empty-stage">
     <text class="key">还没有纪念日</text>
     <text>添加在一起、生日等特殊日子</text>
   </view>
 
   <view class="add-panel card-soft" wx:if="{{showAdd}}">
-    <input class="add-panel__input" placeholder="名称，如：在一起" value="{{titleDraft}}" bindinput="onTitleInput" />
-    <picker mode="date" value="{{dateDraft}}" bindchange="onPickDate">
+    <input class="add-panel__input" placeholder="名称，如：在一起" value="{{titleDraft}}" disabled="{{submitting}}" bindinput="onTitleInput" />
+    <picker mode="date" value="{{dateDraft}}" disabled="{{submitting}}" bindchange="onPickDate">
       <view class="add-panel__picker">日期：{{dateDraft}}</view>
     </picker>
+    <text wx:if="{{saveUnconfirmed}}" class="head__sub">上次保存结果待确认。原内容可重试，改名称或日期后保存会新增。</text>
     <view class="btn-action {{submitting ? 'is-disabled' : ''}}" bindtap="onSubmitAdd">{{submitting ? '保存中…' : '保存'}}</view>
   </view>
 

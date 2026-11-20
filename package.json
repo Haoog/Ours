@@ -4,9 +4,9 @@
   "private": true,
   "description": "OursWXAPP - 两个人的私密朋友圈（开发期 TS 校验配置）",
   "scripts": {
-    "verify:core": "node scripts/verify-core.cjs",
-    "verify:frontend": "node scripts/frontend-regression.cjs",
-    "verify:features": "node scripts/verify-video.cjs && node scripts/verify-search.cjs && node scripts/verify-upload-cleanup.cjs && node scripts/verify-backup.cjs && node scripts/verify-backup-server.cjs",
+    "verify:core": "node scripts/verify-core.cjs && node scripts/verify-map-boundaries.cjs && node scripts/verify-map-covers.cjs",
+    "verify:frontend": "node scripts/frontend-regression.cjs && node scripts/verify-partner-invite.cjs && node scripts/verify-anniversaries-page.cjs && node scripts/verify-moment-detail-media.cjs && node scripts/verify-profile.cjs && node scripts/verify-home.cjs && node scripts/verify-compose-edit.cjs && node scripts/verify-moment-detail-likes.cjs && node scripts/verify-comment-retry.cjs && node scripts/verify-moments-feed-cache.cjs && node scripts/verify-store-profile-writes.cjs && node scripts/verify-moment-detail-boot.cjs && node scripts/verify-anniversary-retry.cjs && node scripts/verify-compose-publish-record.cjs && node scripts/verify-compose-lifecycle.cjs && node scripts/verify-page-entry-recovery.cjs && node scripts/verify-anniversary-page-lifecycle.cjs",
+    "verify:features": "node scripts/verify-video.cjs && node scripts/verify-search.cjs && node scripts/verify-moments-cursor.cjs && node scripts/verify-upload-cleanup.cjs && node scripts/verify-backup.cjs && node scripts/verify-backup-server.cjs && node scripts/verify-live-photo.cjs && node scripts/verify-upload-progress.cjs && node scripts/verify-cloud-url-cache.cjs && node scripts/verify-compose-location-date.cjs && node scripts/verify-moments-thumbnails.cjs && node scripts/verify-recap-compose.cjs",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p miniprogram/tsconfig.json",
     "admin:dev": "npm --prefix admin-web run dev",
     "admin:build": "npm --prefix admin-web run build"

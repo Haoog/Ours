@@ -59,16 +59,22 @@
     </scroll-view>
 
     <view wx:if="{{selectedPlace}}" class="story-card card-soft" hover-class="u-press" bindtap="onTapStory">
-      <view class="story-card__media {{selectedPlace.latestCover ? '' : 'story-card__media--empty'}}">
-        <image
-          wx:if="{{selectedPlace.latestCover}}"
-          class="story-card__image"
-          src="{{selectedPlace.latestCover}}"
-          mode="aspectFill"
-          lazy-load />
+      <view class="story-card__media">
+        <block wx:if="{{selectedPlace.latestCover && !coverFailed}}">
+          <image
+            wx:for="{{[coverAttempt]}}"
+            wx:key="*this"
+            class="story-card__image"
+            src="{{selectedPlace.latestCover}}"
+            data-cover-attempt="{{item}}"
+            binderror="onCoverError"
+            mode="aspectFill"
+            lazy-load />
+        </block>
         <view wx:else class="story-card__placeholder">
           <text class="story-card__placeholder-mark">{{selectedPlace.latestHasVideo ? '▶' : '✦'}}</text>
-          <text>{{selectedPlace.latestHasVideo ? '一段视频回忆' : '这一站，留下过回忆'}}</text>
+          <text wx:if="{{coverFailed}}" class="story-card__retry" catchtap="onRetryCover">封面加载失败 · 重试</text>
+          <text wx:else>{{selectedPlace.latestHasVideo ? '一段视频回忆' : '这一站，留下过回忆'}}</text>
         </view>
         <view wx:if="{{selectedPlace.latestHasVideo}}" class="story-card__media-tag">视频</view>
       </view>

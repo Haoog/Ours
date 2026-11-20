@@ -198,6 +198,10 @@ export interface MapPlace {
   latestMomentDate?: string
   latestMomentContent?: string
   latestMomentCover?: string
+  /** 旧版回包的封面链接 */
+  latestMomentCoverUrl?: string
+  /** 原始封面来源，有封面时为 fileID 或原有链接 */
+  latestMomentCoverFileID?: string
   latestMomentHasVideo?: boolean
 }
 

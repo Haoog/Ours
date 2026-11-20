@@ -54,6 +54,7 @@ async function verifyServer() {
   let measureHook = null
   let transactionTail = Promise.resolve()
   const snapshotContents = new Map()
+  const unreadableFiles = new Set()
   let nextResponse = { statusCode: 200, headers: { 'content-length': '300' } }
   const fakeHttps = {
     request(url, options, callback) {
@@ -155,7 +156,9 @@ async function verifyServer() {
       return { fileID }
     },
     async getTempFileURL({ fileList }) {
-      return { fileList: fileList.map(fileID => ({ fileID, tempFileURL: 'https://example.invalid/media', status: 0 })) }
+      return { fileList: fileList.map(fileID => unreadableFiles.has(fileID)
+        ? { fileID, status: -503003 }
+        : { fileID, tempFileURL: 'https://example.invalid/media', status: 0 }) }
     },
     async downloadFile({ fileID }) {
       if (!snapshotContents.has(fileID)) throw new Error('download unavailable')
@@ -175,6 +178,10 @@ async function verifyServer() {
   })
   vm.runInContext(fs.readFileSync(path.join(root, 'cloudfunctions/ours/index.js'), 'utf8') + `
     assertTextSafe = async () => {};
+    const originalMeasurements = [measureCloudFileSizes, measureCloudFileBytes];
+    globalThis.restoreMediaMeasurements = () => {
+      [measureCloudFileSizes, measureCloudFileBytes] = originalMeasurements;
+    };
     measureCloudFileSizes = async ids => { await onMeasure(); return new Map(ids.map(id => [id, 100])); };
     measureCloudFileBytes = async ids => { await onMeasure(); return ids.length * 100; };
     globalThis.api = { addMoment, deleteMoment, cleanupUploadedFiles, drainMediaCleanup, updateMoment, setMomentLike, compareMomentOrder,
@@ -186,8 +193,38 @@ async function verifyServer() {
   assert.equal(api.prevDayKey('2024-03-01'), '2024-02-29')
   assert.equal(api.prevDayKey('2026-01-01'), '2025-12-31')
   assert(Number.isNaN(api.dateKeyEpoch('2026-02-29')))
-  assert.equal(api.daysUntilAnniversary('2020-02-29', true, new Date('2025-02-27T16:00:00Z')), 0)
+  const anniversaryNow = new Date('2026-11-19T16:00:00Z') // 2026-11-20 in Beijing
+  assert.equal(api.daysUntilAnniversary('2027-12-01', true, anniversaryNow), 376)
+  assert.equal(api.daysUntilAnniversary('2020-11-19', true, anniversaryNow), 364)
+  assert.equal(api.daysUntilAnniversary('2026-11-20', true, anniversaryNow), 0)
+  assert.equal(api.daysUntilAnniversary('2020-11-20', true, anniversaryNow), 0)
+  const nonLeapFeb28 = new Date('2025-02-27T16:00:00Z')
+  assert.equal(api.daysUntilAnniversary('2028-02-29', true, nonLeapFeb28), 1096)
+  assert.equal(api.daysUntilAnniversary('2020-02-29', true, nonLeapFeb28), 0)
   assert.equal(api.daysUntilAnniversary('2020-02-29', true, new Date('2025-02-28T16:00:00Z')), 364)
+
+  documents.anniversaries = {
+    future: { _id: 'future', coupleId: 'space', title: '未来纪念日', date: '2027-12-01', yearly: true },
+    legacy: { _id: 'legacy', coupleId: 'space', title: '历史纪念日', date: '2020-12-10' },
+    past: { _id: 'past', coupleId: 'space', title: '一次性纪念日', date: '2026-11-19', yearly: false },
+  }
+  context.Date = class extends Date {
+    constructor(...args) { super(...(args.length ? args : [anniversaryNow.getTime()])) }
+    static now() { return anniversaryNow.getTime() }
+  }
+  try {
+    const payload = { coupleId: 'space' }
+    const list = await context.exports.main({ action: 'listAnniversaries', payload })
+    assert.equal(list.ok, true, list.error)
+    assert.deepEqual(clone(list.data.map(({ id, daysLeft }) => [id, daysLeft])), [['legacy', 20], ['past', -1], ['future', 376]])
+    const next = await context.exports.main({ action: 'getNextAnniversary', payload })
+    assert.deepEqual(clone(next), {
+      ok: true, data: { id: 'legacy', title: '历史纪念日', date: '2020-12-10', daysLeft: 20, label: '还有 20 天' },
+    })
+  } finally {
+    context.Date = Date
+    delete documents.anniversaries
+  }
   assert.equal(await api.requestContentLength('https://example.invalid/file'), 300)
   nextResponse = { statusCode: 206, headers: { 'content-length': '1', 'content-range': 'bytes 0-0/300' } }
   assert.equal(await api.requestContentLength('https://example.invalid/file', 'GET'), 300)
@@ -219,6 +256,24 @@ async function verifyServer() {
   await assert.rejects(() => api.updateMoment('b', { coupleId: 'space', momentId: first.id, content: 'wrong owner', momentDate: '2026-10-13' }), /只能编辑/)
   await api.updateMoment('a', { coupleId: 'space', momentId: first.id, content: 'edited', momentDate: '2026-10-12' })
   assert.equal(documents.moments[first.id].content, 'edited')
+  const previousStartDate = documents.couples.space.startDate
+  documents.couples.space.startDate = '2026-10-13'
+  const original = clone(documents.moments[first.id])
+  await api.updateMoment('a', { coupleId: 'space', momentId: first.id, content: 'edited with legacy date', momentDate: original.momentDate })
+  const partial = await context.exports.main({
+    action: 'updateMomentFields', payload: { coupleId: 'space', momentId: first.id, content: 'body only' },
+  })
+  assert.equal(partial.ok, true, partial.error)
+  const updated = documents.moments[first.id]
+  assert.equal(updated.content, 'body only')
+  assert.equal(updated.momentDate, original.momentDate)
+  assert.equal(updated.sortAt, original.sortAt)
+  assert.deepEqual(updated.location, original.location)
+  assert.equal(updated.tag, original.tag)
+  await assert.rejects(() => api.updateMoment('a', { coupleId: 'space', momentId: first.id, momentDate: '2026-10-11' }), /开始日/)
+  await assert.rejects(() => api.updateMoment('a', { coupleId: 'space', momentId: first.id, momentDate: '2026-02-29' }), /日期格式/)
+  await assert.rejects(() => api.addMoment('a', { ...payload, requestId: 'date_regression', momentDate: original.momentDate }), /开始日/)
+  documents.couples.space.startDate = previousStartDate
   assert.equal(documents.couples.space.usage.momentCount, 1)
   await api.setMomentLike('b', { coupleId: 'space', momentId: first.id, liked: true })
   await api.setMomentLike('b', { coupleId: 'space', momentId: first.id, liked: true })
@@ -478,22 +533,91 @@ async function verifyServer() {
   assert.equal(collections.places.find(place => place.name === '__proto__').count, 1)
   console.log('PASS: invite ownership, activation, server-only demo gate, filtered pages and tied neighbor order')
   console.log('PASS: calendar boundaries, media ownership, cleanup failures, empty input, comment pagination and idempotent deletion')
+
+  nextResponse = { statusCode: 200, headers: { 'content-length': '300' } }
+  context.restoreMediaMeasurements()
+  for (const [caseName, usageVersion, targetBytes] of [
+    ['current-usage', 2, undefined],
+    ['legacy-usage', undefined, undefined],
+    ['legacy-usage-with-target-bytes', undefined, 600],
+  ]) {
+    const coupleId = `delete-${caseName}`
+    const targetId = `${coupleId}-target`
+    const remainingId = `${coupleId}-remaining`
+    const missing = `cloud://test.bucket/moments/${coupleId}/images/missing.jpg`
+    const shared = `cloud://test.bucket/moments/${coupleId}/images/shared.jpg`
+    const initialUsage = { momentCount: 2, mediaItems: 5, storageBytes: 999 }
+    documents.couples[coupleId] = { _id: coupleId, memberA: { openid: 'a' }, usageVersion, usage: clone(initialUsage) }
+    documents.moments[targetId] = {
+      _id: targetId, coupleId, images: [missing, shared],
+      ...(targetBytes === undefined ? {} : { mediaBytes: targetBytes }),
+    }
+    documents.moments[remainingId] = { _id: remainingId, coupleId, images: [shared] }
+    documents.rants[coupleId] = { _id: coupleId, coupleId, images: [shared] }
+    unreadableFiles.add(missing)
+    const removeTarget = () => invoke('deleteMoment', { coupleId, momentId: targetId })
+
+    unreadableFiles.add(shared)
+    const blocked = await removeTarget()
+    assert.equal(blocked.ok, false)
+    assert.match(blocked.error, /媒体文件无法读取/)
+    assert(documents.moments[targetId])
+    assert.deepEqual(documents.couples[coupleId].usage, initialUsage)
+    assert.equal(documents.couples[coupleId].mediaCleanup, undefined)
+    unreadableFiles.delete(shared)
+
+    failRegistration = true
+    const rolledBack = await removeTarget()
+    failRegistration = false
+    assert.equal(rolledBack.ok, false)
+    assert.match(rolledBack.error, /registration unavailable/, caseName)
+    assert(documents.moments[targetId])
+    assert.deepEqual(documents.couples[coupleId].usage, initialUsage)
+    assert.equal(documents.couples[coupleId].mediaCleanup, undefined)
+    assert(!removedFiles.includes(missing))
+
+    failFiles = true
+    const deleted = await removeTarget()
+    failFiles = false
+    assert.equal(deleted.ok, true, deleted.error)
+    assert(!documents.moments[targetId])
+    assert(documents.moments[remainingId])
+    const expected = { momentCount: 1, mediaItems: 2, storageBytes: 600 }
+    assert.deepEqual(documents.couples[coupleId].usage, expected)
+    assert.equal(documents.couples[coupleId].usageVersion, 2)
+    const [queued] = Object.values(documents.couples[coupleId].mediaCleanup)
+    assert.equal(queued.momentId, targetId)
+    assert.deepEqual(queued.fileIDs, [missing])
+    queued.readyAt = 0
+    assert.equal((await removeTarget()).ok, true)
+    assert.deepEqual(documents.couples[coupleId].usage, expected)
+    assert.equal(Object.keys(documents.couples[coupleId].mediaCleanup).length, 0)
+    assert(!removedFiles.includes(shared))
+  }
+  console.log('PASS: legacy media deletion rebuilds remaining usage, rolls back with cleanup registration, and safely retries')
 }
 
 async function verifyDraft(directory) {
   const storage = new Map()
   let copies = 0
+  let failWrite = false
+  let openid = 'user'
   const original = path.join(directory, 'photo.jpg')
   fs.writeFileSync(original, Buffer.from([1, 2, 3, 4]))
   const context = loadTS('miniprogram/services/compose-draft.ts', {
-    './session': { coupleId: () => 'space', requireSession: () => ({ role: 'B' }) },
+    './session': { coupleId: () => 'space', requireSession: () => ({ coupleId: 'space', role: 'B', openid }) },
   }, { wx: {
     env: { USER_DATA_PATH: directory },
-    setStorageSync: (key, value) => storage.set(key, clone(value)),
+    setStorageSync: (key, value) => {
+      if (failWrite) throw new Error('storage write failed')
+      storage.set(key, clone(value))
+    },
     getStorageSync: key => storage.get(key),
     removeStorageSync: key => storage.delete(key),
     getFileSystemManager: () => ({
       mkdirSync: (name, recursive) => fs.mkdirSync(name, { recursive }),
+      readdirSync: name => fs.readdirSync(name),
+      unlinkSync: name => fs.unlinkSync(name),
       copyFile: ({ srcPath, destPath, success, fail }) => {
         copies++
         fs.copyFile(srcPath, destPath, error => error ? fail(error) : success())
@@ -519,9 +643,75 @@ async function verifyDraft(directory) {
   assert.equal(restored.livePhotos[0].video, restored.images[0])
   assert.equal(copies, 1, 'The same file referenced by multiple media fields is copied only once')
   assert(fs.readFileSync(restored.images[0]).equals(fs.readFileSync(original)))
+  const draftDirectory = path.dirname(restored.video)
+  const otherDraft = { ...restored, requestId: 'other_request', images: [original], video: '', videoCover: '', livePhotos: [], voice: null }
+  await api.saveComposeDraft(otherDraft, 'moment')
+  const otherCopy = api.readComposeDraft('moment').images[0]
+
+  const empty = { ...restored, images: [], video: '', videoCover: '', livePhotos: [], voice: null }
+  const movie = path.join(directory, 'movie.mp4')
+  const cover = path.join(directory, 'cover.jpg')
+  fs.writeFileSync(movie, 'movie')
+  fs.writeFileSync(cover, 'cover')
+  fs.writeFileSync(path.join(draftDirectory, 'old-copy.mp4'), 'obsolete')
+  for (let i = 0; i < 2; i++) {
+    await api.saveComposeDraft({ ...empty, images: [restored.images[0]], video: movie, videoCover: cover })
+    const stored = api.readComposeDraft()
+    assert.deepEqual(fs.readdirSync(draftDirectory).sort(), [stored.images[0], stored.video, stored.videoCover].map(file => path.basename(file)).sort())
+    assert.equal(fs.readFileSync(stored.video, 'utf8'), 'movie')
+    assert.equal(fs.readFileSync(stored.videoCover, 'utf8'), 'cover')
+
+    if (i === 0) {
+      const previousFiles = fs.readdirSync(draftDirectory).sort()
+      failWrite = true
+      await assert.rejects(api.saveComposeDraft({ ...empty, video: otherCopy }), /storage write failed/)
+      failWrite = false
+      assert.deepEqual(clone(api.readComposeDraft()), clone(stored))
+      assert.deepEqual(fs.readdirSync(draftDirectory).sort(), previousFiles)
+
+      const copyCount = copies
+      const inFlight = api.saveComposeDraft({ ...empty, video: otherCopy })
+      const queued = api.saveComposeDraft({ ...empty, videoCover: otherCopy })
+      openid = 'other-user'
+      await Promise.all([assert.rejects(inFlight, /切换/), assert.rejects(queued, /切换/)])
+      openid = 'user'
+      assert.equal(copies, copyCount + 1, 'Queued saves must recheck identity before copying')
+      assert.deepEqual(clone(api.readComposeDraft()), clone(stored))
+      assert.deepEqual(fs.readdirSync(draftDirectory).sort(), previousFiles)
+
+      let filesAfterRemoval
+      const removal = api.saveComposeDraft({ ...empty, images: [restored.images[0]] })
+        .then(() => { filesAfterRemoval = fs.readdirSync(draftDirectory) })
+      const reuse = api.saveComposeDraft({ ...empty, video: stored.video, videoCover: cover })
+      await Promise.all([removal, reuse])
+      assert(filesAfterRemoval.includes(path.basename(stored.video)), 'Queued snapshots must protect direct draft paths')
+      assert(filesAfterRemoval.includes(path.basename(stored.videoCover)), 'Queued snapshots must protect cached copies')
+      assert.equal(api.readComposeDraft().video, stored.video)
+      assert.equal(api.readComposeDraft().videoCover, stored.videoCover)
+    }
+
+    await api.saveComposeDraft({ ...empty, images: [original] })
+    const retained = api.readComposeDraft().images[0]
+    assert.deepEqual(fs.readdirSync(draftDirectory), [path.basename(retained)])
+    assert(fs.readFileSync(retained).equals(fs.readFileSync(original)))
+    restored.images[0] = retained
+  }
+
+  const writing = api.saveComposeDraft({ ...empty, content: 'queued text', images: [movie] })
+  const reopening = api.waitForComposeDraftSave().then(() => api.readComposeDraft())
+  assert.notEqual(api.readComposeDraft().content, 'queued text', 'Fixture has a save in flight')
+  const settledDraft = await reopening
+  await writing
+  assert.equal(settledDraft.content, 'queued text')
+  assert.equal(fs.readFileSync(settledDraft.images[0], 'utf8'), 'movie')
+
+  api.clearComposeDraft('draft_request', 'moment')
+  assert.equal(api.readComposeDraft('moment').images[0], otherCopy, 'A stale clear must leave the edit draft intact')
   api.clearComposeDraft('draft_request')
-  assert(fs.existsSync(original), 'Clearing a draft must only remove its own copies')
-  console.log('PASS: full media-only draft persistence, scoped storage, original-file preservation')
+  assert(!fs.existsSync(draftDirectory))
+  assert([original, movie, cover, otherCopy].every(file => fs.existsSync(file)))
+  assert.equal(api.readComposeDraft('moment').images[0], otherCopy)
+  console.log('PASS: draft media persistence, queued references, repeated cleanup, storage failure rollback and draft scope')
 }
 
 async function verifyClient() {
@@ -677,14 +867,18 @@ async function verifyComposeSubmitDraftRace() {
         clearComposeDraft: () => { clears++ },
       },
       '../../services/store': {
-        addMoment: async (payload, progress) => {
+        addMoment: async (payload, progress, onCreateState) => {
           publishes++
           if (backgroundFailure) {
             page.onHide()
             await page.draftSaveQueue.catch(() => {})
           }
           if (switchIdentity) session = { ...identity, openid: 'other' }
-          if (uncertain || (backgroundFailure && !publishFailure)) progress(98, '')
+          if (uncertain || (backgroundFailure && !publishFailure)) {
+            progress(98, '')
+            onCreateState('sending')
+          }
+          if (uncertain) onCreateState('uncertain')
           if (publishFailure) throw new Error('publish failed')
         },
         listMomentsPage: async () => [],
@@ -758,7 +952,7 @@ async function verifyRecording() {
     '../../app': { getAppInstance: () => ({ waitBoot: async () => {} }) },
     '../../services/date': { todayKey: () => '2026-01-01' },
     '../../utils/moment-time': { formatMomentDateLabel: () => '今天' },
-    '../../services/compose-draft': { newPublishId: () => 'draft123', readComposeDraft: () => null },
+    '../../services/compose-draft': { newPublishId: () => 'draft123', readComposeDraft: () => null, waitForComposeDraftSave: async () => {} },
     '../../utils/tags': { MOMENT_TAG_POST: [] },
   }, { Page: value => { definition = value }, wx, setInterval, clearInterval })
   const makePage = () => ({

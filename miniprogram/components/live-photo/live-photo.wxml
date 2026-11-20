@@ -1,9 +1,19 @@
 <view class="live-photo" bindtap="onTap">
-  <image class="live-photo__cover" src="{{cover}}" mode="aspectFill" lazy-load="true" />
+  <block wx:if="{{cover && !coverFailed}}">
+    <image wx:for="{{[coverAttempt]}}" wx:key="*this" class="live-photo__cover" src="{{cover}}"
+      data-cover-attempt="{{item}}" binderror="onCoverError" mode="aspectFill" lazy-load="true" />
+  </block>
+  <view wx:if="{{coverFailed && !playing}}" class="live-photo__placeholder">
+    <text class="live-photo__retry" catchtap="retryCover">重试封面</text>
+  </view>
   <video
     wx:if="{{playing}}"
+    wx:for="{{[playbackId]}}"
+    wx:key="*this"
     class="live-photo__video"
     src="{{playSrc}}"
+    data-playback-id="{{item}}"
+    binderror="onVideoError"
     autoplay
     loop
     show-center-play-btn="{{false}}"
@@ -11,5 +21,5 @@
     object-fit="cover"
     muted="{{false}}" />
   <view class="live-photo__badge">实况</view>
-  <view class="live-photo__hint" wx:if="{{!playing}}">轻触播放</view>
+  <view class="live-photo__hint" wx:if="{{!playing}}">{{playbackFailed ? '轻触重试播放' : '轻触播放'}}</view>
 </view>

@@ -2,20 +2,24 @@ import { getAppInstance } from '../app'
 import { getSession, syncSession } from './session'
 
 /** 等待云启动完成；未激活空间时跳转邀请码页 */
-export async function ensureCloudReady(): Promise<boolean> {
+export async function ensureCloudReadyState(): Promise<'ready' | 'offline' | 'redirecting'> {
   await getAppInstance().waitBoot()
   try { await syncSession() } catch {
-    if (getSession()?.status !== 'ready') {
-      wx.showToast({ title: '暂时连不上，请稍后重试', icon: 'none' })
-      return false
-    }
+    const cached = getSession()
+    return cached?.status === 'ready' && cached.coupleId ? 'ready' : 'offline'
   }
   const session = getSession()
   if (session?.status !== 'ready' || !session.coupleId) {
     wx.reLaunch({ url: '/pages/setup/setup' })
-    return false
+    return 'redirecting'
   }
-  return true
+  return 'ready'
+}
+
+export async function ensureCloudReady(): Promise<boolean> {
+  const state = await ensureCloudReadyState()
+  if (state === 'offline') wx.showToast({ title: '暂时连不上，请稍后重试', icon: 'none' })
+  return state === 'ready'
 }
 
 /** 分享卡片带 inviteToken 时（含热启动进 Tab 页） */

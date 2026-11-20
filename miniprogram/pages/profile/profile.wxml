@@ -78,6 +78,9 @@
     </view>
   </view>
 
+  <button wx:if="{{profileError}}" class="btn-action btn-action--ghost" bindtap="onRetryProfile">{{profileError}}</button>
+  <button wx:if="{{avatarRetry || avatarSaving}}" class="btn-action btn-action--ghost" disabled="{{avatarSaving}}" bindtap="onRetryAvatar">{{avatarSaving ? '正在保存头像…' : '头像保存失败，重试'}}</button>
+
   <view class="section-head">
     <text>一起的日子</text>
     <text class="section-head__hint">常用入口</text>

@@ -330,8 +330,10 @@
   border-radius: 6rpx;
   backdrop-filter: blur(8px);
 }
-.scene__cinema--empty {
-  min-height: 280rpx;
+.scene__cinema--photo-placeholder {
+  min-height: 0;
+  background: var(--c-surface-soft);
+  border: 1rpx solid var(--c-divider);
 }
 .scene__cinema-empty {
   width: 100%;
@@ -343,6 +345,14 @@
   gap: 8rpx;
   color: rgba(255, 255, 255, 0.78);
   font-size: 24rpx;
+}
+.scene__photo-placeholder {
+  height: 136rpx;
+  color: var(--c-muted);
+}
+.scene__photo-placeholder-link {
+  color: var(--c-accent-deep);
+  font-weight: 600;
 }
 .scene__cinema-empty-icon {
   color: #fff;

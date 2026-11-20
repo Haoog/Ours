@@ -14,6 +14,18 @@
 }
 .row__label { font-size: 28rpx; color: var(--c-muted); }
 .row__val { font-size: 28rpx; color: var(--c-accent-deep); }
+.refresh-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10rpx;
+  margin-bottom: 16rpx;
+  padding: 24rpx 28rpx;
+}
+.refresh-status__title { font-size: 28rpx; font-weight: 600; color: var(--c-text); }
+.refresh-status__detail { font-size: 24rpx; color: var(--c-muted); }
+.refresh-status__retry { margin: 4rpx 0 0; height: 64rpx; padding: 0 24rpx; font-size: 24rpx; }
+.refresh-status__retry::after { border: 0; }
 .list { display: flex; flex-direction: column; gap: 14rpx; }
 .item { padding: 24rpx 28rpx; }
 .item__title { font-size: 30rpx; font-weight: 600; color: var(--c-text); }

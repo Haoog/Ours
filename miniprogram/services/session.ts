@@ -37,20 +37,33 @@ function loadPersisted(): Session | null {
 let cached: Session | null = loadPersisted()
 let refreshedAt = 0
 let refreshPromise: Promise<Session> | null = null
+let sessionRevision = 0
+let coupleWriteGeneration = 0
+
+function readySessionIdentity(session: Session | null): string {
+  if (session?.status !== 'ready') return ''
+  return JSON.stringify([session.openid, session.coupleId, session.role])
+}
 
 export function syncSession(force = false): Promise<Session> {
   if (refreshPromise) return refreshPromise
   if (!force && cached && Date.now() - refreshedAt < 15000) return Promise.resolve(cached)
-  refreshPromise = bootstrapSession().finally(() => { refreshPromise = null })
-  return refreshPromise
+  const pending = bootstrapSession().finally(() => {
+    if (refreshPromise === pending) refreshPromise = null
+  })
+  refreshPromise = pending
+  return pending
 }
 
 export function getSession(): Session | null {
   return cached
 }
 
-/** 供数据层在原地修改 couple 后回写本地缓存 */
+/** 资料写入生效后，先前开始的查询不能把新资料覆盖。 */
 export function persistSession(): void {
+  sessionRevision++
+  refreshPromise = null
+  refreshedAt = Date.now()
   persist(cached)
 }
 
@@ -65,11 +78,23 @@ export function coupleId(): string {
   return requireSession().coupleId!
 }
 
+/** 同一身份的刷新会替换会话对象，写入须合并到刷新后的缓存。 */
+export function captureCoupleWriteSession() {
+  const { coupleId, role } = requireSession()
+  const generation = coupleWriteGeneration
+  return {
+    coupleId: coupleId!,
+    role,
+    getCurrent: () => generation === coupleWriteGeneration && cached?.status === 'ready' ? cached : null,
+  }
+}
+
 export async function bootstrapSession(opts?: {
   inviteToken?: string
   nickname?: string
   avatarUrl?: string
 }): Promise<Session> {
+  const generation = sessionRevision
   const data = await callOurs<{
     status: SessionStatus
     openid: string
@@ -81,6 +106,10 @@ export async function bootstrapSession(opts?: {
     avatarUrl: opts?.avatarUrl ?? '',
   })
 
+  // 激活或资料写入前开始的查询已过期，等待方也应拿到当前会话。
+  if (generation !== sessionRevision && cached) return cached
+
+  const previousIdentity = readySessionIdentity(cached)
   if (data.status === 'ready' && data.couple) {
     cached = {
       status: 'ready',
@@ -98,6 +127,7 @@ export async function bootstrapSession(opts?: {
       coupleId: data.couple?.id ?? null,
     }
   }
+  if (previousIdentity !== readySessionIdentity(cached)) coupleWriteGeneration += 1
   persist(cached)
   refreshedAt = Date.now()
   return cached
@@ -117,6 +147,10 @@ export async function redeemAccessCodeAndCache(input: {
     couple,
     coupleId: couple.id,
   }
+  sessionRevision += 1
+  coupleWriteGeneration += 1
+  refreshPromise = null
+  refreshedAt = Date.now()
   persist(cached)
   return cached
 }

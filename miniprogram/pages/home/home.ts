@@ -7,14 +7,14 @@ import {
   listMomentsRecent,
   getNextAnniversary,
 } from '../../services/store'
-import { ensureCloudReady, handleInviteQuery } from '../../services/page-boot'
+import { handleInviteQuery } from '../../services/page-boot'
 import { pickMomentCover } from '../../utils/media-url'
 import { momentDisplayAt } from '../../utils/moment-time'
 import { getAppInstance } from '../../app'
 import { formatSlate } from '../../services/format'
 import { Moment } from '../../services/types'
 import { getThemeStyle, syncTheme } from '../../services/theme'
-import { syncSession } from '../../services/session'
+import { captureCoupleWriteSession, getSession, syncSession } from '../../services/session'
 
 interface RecentVO {
   id: string
@@ -26,6 +26,12 @@ interface RecentVO {
   dow: string
   role: 'A' | 'B'
   authorLabel: string
+}
+
+interface HomeRequest {
+  revision: number
+  scope: string
+  session: ReturnType<typeof captureCoupleWriteSession> | null
 }
 
 interface FabPosition {
@@ -97,51 +103,93 @@ function initialFabPosition(): FabPosition {
   })
 }
 
+const emptyHomeContent = {
+  ready: false,
+  bound: false,
+  days: 0,
+  startDate: '',
+  recent: [] as RecentVO[],
+  hasRecent: false,
+  recentLoaded: false,
+  recentError: '',
+  nextAnn: null as { title: string; label: string } | null,
+  annError: false,
+}
+
+function getHomeScope(): string {
+  const session = getSession?.()
+  if (session?.status !== 'ready' || !session.openid || !session.coupleId) return ''
+  return JSON.stringify([session.openid, session.coupleId, session.role])
+}
+
 Page({
   data: {
     themeStyle: getThemeStyle(),
-    ready: false,
-    bound: false,
-    days: 0,
-    startDate: '',
-    recent: [] as RecentVO[],
-    hasRecent: false,
-    recentLoaded: false,
-    recentError: '',
+    ...emptyHomeContent,
     recentLoading: false,
-    nextAnn: null as { title: string; label: string } | null,
     fabLeft: 0,
     fabTop: 0,
     fabDragging: false,
   },
 
-  async onLoad(options: Record<string, string | undefined>) {
+  bootTask: null as Promise<void> | null,
+  refreshTask: null as Promise<void> | null,
+  refreshRevision: 0,
+  pullRefreshTask: null as Promise<void> | null,
+  accountScope: '',
+  hasShown: false,
+  readSession: null as HomeRequest['session'],
+
+  onLoad(options: Record<string, string | undefined>) {
     syncTheme(this)
     this.syncFabPosition()
-    await getAppInstance().waitBoot()
-    await handleInviteQuery(options)
+    this.bootTask = getAppInstance().waitBoot()
+      .then(() => handleInviteQuery(options))
+      .finally(() => { this.bootTask = null })
+    return this.bootTask
   },
 
-  async onShow() {
+  onShow() {
     syncTheme(this)
     this.syncFabPosition()
-    this.renderOptimistic()
-    await getAppInstance().waitBoot()
-    if (!(await ensureCloudReady())) {
-      this.setData({ ready: true, recentError: '连接失败，请重试' })
-      return
-    }
-    await this.refresh()
+    const forceSession = this.hasShown
+    this.hasShown = true
+    return this.refresh(forceSession)
   },
 
-  async onPullDownRefresh() {
-    await this.refresh()
+  onHide() {
+    this.invalidateRefresh()
+  },
+
+  onUnload() {
+    this.invalidateRefresh()
+  },
+
+  invalidateRefresh() {
+    this.refreshRevision++
+    this.refreshTask = null
+    this.readSession = null
+    this.finishPullRefresh()
+  },
+
+  onPullDownRefresh() {
+    const pending = this.refresh(true)
+    if (this.pullRefreshTask === pending) return pending
+    this.pullRefreshTask = pending
+    return pending.finally(() => {
+      if (this.pullRefreshTask === pending) this.finishPullRefresh()
+    })
+  },
+
+  finishPullRefresh() {
+    if (!this.pullRefreshTask) return
+    this.pullRefreshTask = null
     wx.stopPullDownRefresh()
   },
 
   /** 冷启动用本地持久化的会话即时出图，避免白屏；随后 refresh 拉最新覆盖 */
   renderOptimistic() {
-    if (this.data.ready) return
+    if (this.data.ready || !this.accountScope) return
     const couple = getCouple()
     if (!couple) return
     this.setData({
@@ -152,81 +200,144 @@ Page({
     })
   },
 
-  async refresh() {
-    if (this.data.recentLoading) return
-    this.setData({ recentLoading: true, recentError: '' })
-    let sessionFailed = false
-    await syncSession().catch(() => { sessionFailed = true })
-    const couple = getCouple()
-    if (!couple) {
-      this.setData(sessionFailed
-        ? { ready: true, recentError: '连接失败，请重试', recentLoading: false }
-        : { ready: true, bound: false, recentLoaded: true, recentLoading: false })
-      return
+  setHomeScope(scope: string) {
+    if (scope === this.accountScope) return
+    const resetContent = this.accountScope || this.data.recentError
+    this.accountScope = scope
+    if (resetContent) this.setData(emptyHomeContent)
+  },
+
+  acceptHomeResult({ revision, scope, session }: HomeRequest) {
+    if (revision !== this.refreshRevision) return false
+    const currentScope = getHomeScope()
+    if (scope === currentScope && (!session || session.getCurrent())) return true
+    this.invalidateRefresh()
+    this.setHomeScope(currentScope)
+    if (this.data.recentLoading) this.setData({ recentLoading: false })
+    return false
+  },
+
+  refresh(forceSession = false) {
+    const scope = getHomeScope()
+    if (scope !== this.accountScope || (this.readSession && !this.readSession.getCurrent())) {
+      this.invalidateRefresh()
+      this.setHomeScope(scope)
     }
+    if (!this.refreshTask) {
+      this.renderOptimistic()
+      this.readSession = null
+      this.refreshTask = this.loadHome(++this.refreshRevision, forceSession)
+    }
+    return this.refreshTask
+  },
 
-    this.setData({
-      ready: true,
-      bound: !!couple.memberB,
-      days: daysBetween(couple.startDate),
-      startDate: couple.startDate,
-    })
+  async loadHome(revision: number, forceSession: boolean) {
+    this.setData({ recentLoading: true })
+    try {
+      await this.bootTask
+      await getAppInstance()?.waitBoot()
+      if (revision !== this.refreshRevision) return
+      this.setHomeScope(getHomeScope())
+      let sessionFailed = false
+      const session = await syncSession(forceSession).catch(() => {
+        sessionFailed = true
+        return getSession()
+      })
+      if (revision !== this.refreshRevision) return
+      const scope = getHomeScope()
+      this.setHomeScope(scope)
+      const inactive = session && !scope
+      if (inactive && !sessionFailed) {
+        this.setData({ ready: false, recentError: '' })
+        wx.reLaunch({ url: '/pages/setup/setup' })
+        return
+      }
+      const couple = getCouple()
+      if (!couple || inactive) {
+        this.setData({ ready: false, recentError: '连接失败，请重试' })
+        return
+      }
 
+      this.setData({
+        ready: true,
+        bound: !!couple.memberB,
+        days: daysBetween(couple.startDate),
+        startDate: couple.startDate,
+      })
+      this.readSession = scope ? captureCoupleWriteSession() : null
+      const request = { revision, scope, session: this.readSession }
+      await Promise.all([this.loadRecent(request), this.loadNextAnniversary(request)])
+    } catch {
+      if (revision === this.refreshRevision) {
+        this.setHomeScope(getHomeScope())
+        this.setData({ recentError: '连接失败，请重试' })
+      }
+    } finally {
+      if (revision === this.refreshRevision) {
+        this.refreshTask = null
+        this.setData({ recentLoading: false })
+      }
+    }
+  },
+
+  async loadNextAnniversary(request: HomeRequest) {
+    try {
+      const nextAnn = await getNextAnniversary()
+      if (!this.acceptHomeResult(request)) return
+      this.setData({ nextAnn: nextAnn ? { title: nextAnn.title, label: nextAnn.label } : null, annError: false })
+    } catch {
+      if (this.acceptHomeResult(request)) this.setData({ annError: true })
+    }
+  },
+
+  async loadRecent(request: HomeRequest) {
     try {
       const moments = await listMomentsRecent(5)
-      void getNextAnniversary().then(nextAnn => {
-        this.setData({ nextAnn: nextAnn ? { title: nextAnn.title, label: nextAnn.label } : null })
-      }).catch(() => undefined)
-
-      const identity = getIdentity()
-      const myRole = identity.role
-
-      const recent: RecentVO[] = await Promise.all(
-        moments.map(async (m: Moment) => {
-          const slate = formatSlate(momentDisplayAt(m))
-          const cover = await pickMomentCover(m)
-          const tags: string[] = []
-          if (m.images.length) tags.push(`${m.images.length}图`)
-          if (m.livePhotos?.length) tags.push(`${m.livePhotos.length}实况`)
-          if (m.videos?.length) tags.push('视频')
-          if (m.voices?.length) tags.push('语音')
-          const mediaTag = !cover && tags.length ? tags.join('·') : tags.length > 1 ? tags.join('·') : ''
-          const cap = (m.content || '').slice(0, 40) || (tags.length ? tags.join(' · ') : '')
-          return {
-            id: m.id,
-            cover,
-            mediaTag,
-            caption: cap,
-            hasVideo: (m.videos?.length ?? 0) > 0,
-            md: slate.md,
-            dow: slate.dow,
-            role: m.authorRole,
-            authorLabel: m.authorRole === myRole ? '我' : 'TA',
-          }
-        }),
-      )
-
+      if (!this.acceptHomeResult(request)) return
+      const myRole = getIdentity().role
+      const recent: RecentVO[] = moments.map(m => {
+        const slate = formatSlate(momentDisplayAt(m))
+        const tags: string[] = []
+        if (m.images.length) tags.push(`${m.images.length}图`)
+        if (m.livePhotos?.length) tags.push(`${m.livePhotos.length}实况`)
+        if (m.videos?.length) tags.push('视频')
+        if (m.voices?.length) tags.push('语音')
+        return {
+          id: m.id,
+          cover: '',
+          mediaTag: tags.join('·'),
+          caption: (m.content || '').slice(0, 40) || tags.join(' · '),
+          hasVideo: (m.videos?.length ?? 0) > 0,
+          md: slate.md,
+          dow: slate.dow,
+          role: m.authorRole,
+          authorLabel: m.authorRole === myRole ? '我' : 'TA',
+        }
+      })
       this.setData({
         recent,
         hasRecent: recent.length > 0,
         recentLoaded: true,
+        recentError: '',
       })
+      for (const moment of moments) void this.loadRecentCover(moment, request)
     } catch (err) {
+      if (!this.acceptHomeResult(request)) return
       const msg = err instanceof Error ? err.message : '加载失败'
       wx.showToast({ title: msg, icon: 'none' })
-      this.setData({ ready: true, recentError: msg })
-    } finally {
-      this.setData({ recentLoading: false })
+      this.setData({ recentError: msg })
     }
   },
 
-  async onRetryRecent() {
-    if (this.data.recentLoading) return
-    if (!(await ensureCloudReady())) {
-      this.setData({ recentError: '连接失败，请重试' })
-      return
-    }
-    await this.refresh()
+  async loadRecentCover(moment: Moment, request: HomeRequest) {
+    const cover = await pickMomentCover(moment).catch(() => '')
+    if (!this.acceptHomeResult(request) || !cover) return
+    const index = this.data.recent.findIndex(item => item.id === moment.id)
+    if (index >= 0) this.setData({ [`recent[${index}].cover`]: cover })
+  },
+
+  onRetryRecent() {
+    return this.refresh(true)
   },
 
   onTapMoments() {
@@ -306,6 +417,7 @@ Page({
   },
 
   onTapAnniversary() {
+    if (this.data.annError) return this.refresh()
     wx.navigateTo({ url: '/subpages/anniversaries/anniversaries' })
   },
 

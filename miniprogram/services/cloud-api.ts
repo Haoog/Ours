@@ -4,6 +4,7 @@ export interface CloudResult<T> {
   ok: boolean
   data?: T
   error?: string
+  commentRejected?: boolean
 }
 
 /** 单次请求超时（毫秒）。云函数冷启动可能偏慢，留足余量 */
@@ -23,6 +24,7 @@ const RETRYABLE_ACTIONS = new Set([
 interface OursError extends Error {
   /** 业务错误（云函数 ok=false）不应重试 */
   business?: boolean
+  commentRejected?: boolean
 }
 
 function delay(ms: number): Promise<void> {
@@ -48,6 +50,7 @@ async function invoke<T>(action: string, payload: Record<string, unknown>): Prom
   if (!result.ok) {
     const err: OursError = new Error(result.error || '云函数调用失败')
     err.business = true
+    if (action === 'addCommentOnce' && result.commentRejected === true) err.commentRejected = true
     throw err
   }
   return result.data as T
@@ -55,7 +58,10 @@ async function invoke<T>(action: string, payload: Record<string, unknown>): Prom
 
 export async function callOurs<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
   let lastErr: unknown
-  const retries = RETRYABLE_ACTIONS.has(action) ||
+  const hasRequestId = typeof payload.requestId === 'string' && !!payload.requestId
+  const retryComment = action === 'addCommentOnce' && hasRequestId
+  const retryAnniversary = action === 'addAnniversaryOnce' && hasRequestId
+  const retries = RETRYABLE_ACTIONS.has(action) || retryComment || retryAnniversary ||
     (action === 'addMoment' && !!payload.requestId) ? MAX_RETRY : 0
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -63,7 +69,11 @@ export async function callOurs<T>(action: string, payload: Record<string, unknow
     } catch (err) {
       lastErr = err
       // 业务错误（如「今天已签到」）直接抛出，不重试
-      if ((err as OursError)?.business) throw err
+      const failure = err as OursError
+      if (failure?.business) {
+        if (retryComment && attempt > 0) failure.commentRejected = false
+        throw err
+      }
       if (attempt < retries) {
         await delay(400 * (attempt + 1))
         continue

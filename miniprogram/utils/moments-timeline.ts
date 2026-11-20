@@ -14,11 +14,13 @@ export interface SceneVO {
   timeText: string
   content: string
   previewImages: string[]
-  imageCount: number
+  previewOverflow: number
   layout: SceneLayout
   bentoClass: string
   coverUrl: string
   hasCover: boolean
+  showPhotoPlaceholder: boolean
+  hasPhotos: boolean
   hasVideo: boolean
   hasLive: boolean
   hasVoice: boolean
@@ -42,18 +44,18 @@ export type TimelineRow =
 const RELATION_MILESTONES = [100, 365, 500, 1000]
 const POST_MILESTONES = [50, 100, 200]
 
-function pickLayout(imageCount: number, hasMedia: boolean, isSystem: boolean): SceneLayout {
+function pickLayout(previewCount: number, hasMedia: boolean, isSystem: boolean): SceneLayout {
   if (isSystem) return 'signal'
-  if (!hasMedia && imageCount === 0) return 'verse'
-  if (imageCount >= 5) return 'reel'
-  if (imageCount >= 2) return 'collage'
+  if (!hasMedia && previewCount === 0) return 'verse'
+  if (previewCount >= 5) return 'reel'
+  if (previewCount >= 2) return 'collage'
   return 'cinema'
 }
 
-function bentoClass(imageCount: number): string {
-  if (imageCount === 2) return '2'
-  if (imageCount === 3) return '3'
-  if (imageCount >= 4) return '4'
+function bentoClass(previewCount: number): string {
+  if (previewCount === 2) return '2'
+  if (previewCount === 3) return '3'
+  if (previewCount >= 4) return '4'
   return '1'
 }
 
@@ -64,21 +66,17 @@ function momentToScene(
   stagger: 'a' | 'b',
 ): SceneVO {
   const slate = formatSlate(momentDisplayAt(m))
-  const imageCount = m.images?.length || m.livePhotos?.length || 0
-  let previewImages = m.previewImages?.length
-    ? m.previewImages.slice(0, 9)
-    : m.coverUrl
-      ? [m.coverUrl]
-      : []
-  if (!previewImages.length && imageCount > 0 && m.coverUrl) {
-    previewImages = [m.coverUrl]
-  }
+  const availablePreviews = m.previewImages?.filter(url => typeof url === 'string' && url.trim()) ?? []
+  const coverUrl = availablePreviews[0] || m.coverUrl?.trim() || ''
+  const previewImages = availablePreviews.length ? availablePreviews.slice(0, 9) : coverUrl ? [coverUrl] : []
+  const previewCount = previewImages.length
+  const hasPhotos = (m.images?.length ?? 0) > 0
   const hasVideo = (m.videos?.length ?? 0) > 0
   const hasLive = (m.livePhotos?.length ?? 0) > 0
   const hasVoice = (m.voices?.length ?? 0) > 0
-  const hasMedia = previewImages.length > 0 || hasVideo || hasLive || hasVoice
+  const hasMedia = hasPhotos || hasVideo || hasLive || hasVoice
   const isSystem = m.kind === 'system'
-  const layout = pickLayout(imageCount || previewImages.length, hasMedia, isSystem)
+  const layout = pickLayout(previewCount, hasMedia, isSystem)
 
   return {
     id: m.id,
@@ -88,11 +86,13 @@ function momentToScene(
     timeText: `${slate.md} · ${slate.dow}`,
     content: (m.content || '').trim(),
     previewImages,
-    imageCount: imageCount || previewImages.length,
+    previewOverflow: Math.max(0, availablePreviews.length - previewCount),
     layout,
-    bentoClass: bentoClass(imageCount || previewImages.length),
-    coverUrl: previewImages[0] || m.coverUrl || '',
-    hasCover: previewImages.length > 0,
+    bentoClass: bentoClass(previewCount),
+    coverUrl,
+    hasCover: previewCount > 0,
+    showPhotoPlaceholder: previewCount === 0 && hasPhotos && !hasVideo && !hasLive,
+    hasPhotos,
     hasVideo,
     hasLive,
     hasVoice,
@@ -106,6 +106,22 @@ function momentToScene(
     commentCount: m.commentCount ?? 0,
     likeCount: m.likeCount ?? 0,
     likedByMe: m.likedByMe ?? false,
+  }
+}
+
+export function withoutFailedPreview(scene: SceneVO, src: string): SceneVO {
+  if (!scene.previewImages.includes(src)) return scene
+  const previewImages = scene.previewImages.filter(url => url !== src)
+  const count = previewImages.length
+  return {
+    ...scene,
+    previewImages,
+    previewOverflow: count ? scene.previewOverflow : 0,
+    layout: pickLayout(count, true, scene.isSystem),
+    bentoClass: bentoClass(count),
+    coverUrl: previewImages[0] ?? '',
+    hasCover: count > 0,
+    showPhotoPlaceholder: count === 0 && scene.hasPhotos && !scene.hasVideo && !scene.hasLive,
   }
 }
 

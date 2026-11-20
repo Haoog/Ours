@@ -37,5 +37,5 @@
     <text wx:else>邀请码只能使用一次。激活后，你可以在“我们”页面邀请另一位成员加入。</text>
   </view>
 
-  <view class="btn-action" hover-class="u-press" bindtap="onSubmit">激活并开始使用</view>
+  <view class="btn-action" hover-class="u-press" bindtap="onSubmit">{{submitting ? '正在激活…' : activated ? '进入首页' : '激活并开始使用'}}</view>
 </view>

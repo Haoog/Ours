@@ -9,6 +9,7 @@ import {
   getSession,
   requireSession,
   bootstrapSession,
+  captureCoupleWriteSession,
   redeemAccessCodeAndCache,
   persistSession,
 } from './session'
@@ -85,26 +86,42 @@ export async function createPartnerInvite(): Promise<{ token: string; expiresAt:
 }
 
 export async function updateStartDate(startDate: string): Promise<Couple> {
+  const request = captureCoupleWriteSession()
   const couple = await callOurs<Couple>('updateStartDate', {
-    coupleId: coupleId(),
+    coupleId: request.coupleId,
     startDate,
   })
-  const s = requireSession()
-  s.couple = couple
-  persistSession()
+  const s = request.getCurrent()
+  if (s?.couple) {
+    s.couple = { ...s.couple, startDate: couple.startDate }
+    persistSession()
+  }
   return couple
 }
 
 export async function updateProfile(input: { nickname: string; avatarUrl?: string }): Promise<Couple> {
-  const payload: Record<string, string> = {
-    coupleId: coupleId(),
-    nickname: input.nickname,
+  const request = captureCoupleWriteSession()
+  const { nickname, avatarUrl } = input
+  const couple = await callOurs<Couple>('updateProfile', {
+    coupleId: request.coupleId,
+    nickname,
+    ...(avatarUrl == null ? {} : { avatarUrl }),
+  })
+  const s = request.getCurrent()
+  const field = request.role === 'A' ? 'memberA' : 'memberB'
+  const member = s?.couple?.[field]
+  const updated = couple[field]
+  if (s?.couple && member && updated) {
+    s.couple = {
+      ...s.couple,
+      [field]: {
+        ...member,
+        nickname: updated.nickname,
+        ...(avatarUrl == null ? {} : { avatarUrl: updated.avatarUrl }),
+      },
+    }
+    persistSession()
   }
-  if (input.avatarUrl !== undefined) payload.avatarUrl = input.avatarUrl
-  const couple = await callOurs<Couple>('updateProfile', payload)
-  const s = requireSession()
-  s.couple = couple
-  persistSession()
   return couple
 }
 
@@ -117,15 +134,24 @@ export async function uploadAvatar(localPath: string): Promise<string> {
 
 const DEFAULT_PAGE_SIZE = 20
 
+export interface MomentsCursor {
+  momentDate: string
+  createdAt: number
+  id: string
+}
+
 export interface MomentsPage {
   items: Moment[]
   total: number
   hasMore: boolean
+  // Omitted for offset responses, null when cursor pagination reaches the end.
+  nextCursor?: MomentsCursor | null
 }
 
 export async function listMomentsPage(options?: {
   limit?: number
   skip?: number
+  cursor?: MomentsCursor | null
   tag?: MomentTag | ''
   mediaFilter?: 'image' | 'voice' | 'live' | ''
   keyword?: string
@@ -139,6 +165,7 @@ export async function listMomentsPage(options?: {
     limit: options?.limit ?? DEFAULT_PAGE_SIZE,
     skip: options?.skip ?? 0,
   }
+  if (options?.cursor !== undefined) payload.cursor = options.cursor
   if (options?.tag) payload.tag = options.tag
   if (options?.mediaFilter) payload.mediaFilter = options.mediaFilter
   if (options?.locationName) payload.locationName = options.locationName
@@ -243,6 +270,7 @@ function resetUploadState() {
 
 /** 取消当前发布的所有在途上传 */
 export function cancelMomentUpload(): void {
+  if (!trackingUploads) return
   uploadAborted = true
   for (const t of activeUploadTasks) {
     try {
@@ -262,17 +290,26 @@ function uploadOne(
   onFileProgress?: (percent: number) => void,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    let settled = false
     const task = wx.cloud.uploadFile({
       cloudPath,
       filePath,
-      success: res => resolve(res.fileID),
-      fail: reject,
+      success: res => {
+        settled = true
+        resolve(res.fileID)
+      },
+      fail: err => {
+        settled = true
+        reject(err)
+      },
     })
     if (trackingUploads && task && typeof task.abort === 'function') {
       activeUploadTasks.push(task)
     }
     if (onFileProgress && task && typeof task.onProgressUpdate === 'function') {
-      task.onProgressUpdate(res => onFileProgress(res.progress))
+      task.onProgressUpdate(res => {
+        if (!settled && !uploadAborted) onFileProgress(res.progress)
+      })
     }
   })
 }
@@ -400,8 +437,9 @@ async function uploadLocalFiles(
 ): Promise<string[]> {
   if (trackingUploads) ensureUploadOwner()
   const cid = trackingUploads && uploadOwner ? uploadOwner.coupleId : coupleId()
-  const locals = localPaths.filter(p => !p.startsWith('cloud://'))
+  const localCount = localPaths.filter(p => !p.startsWith('cloud://')).length
   let localDone = 0
+  let totalProgress = 0
 
   // asyncPool 保序：返回的 fileID 顺序与 localPaths 一致
   return asyncPool(localPaths, UPLOAD_CONCURRENCY, async filePath => {
@@ -409,14 +447,18 @@ async function uploadLocalFiles(
     const ext = fileExt(filePath, defaultExt)
     const bytes = await localFileSize(filePath)
     const cloudPath = `moments/${cid}/${subfolder}/${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${ext}`
-    const id = await uploadOneWithRetry(filePath, cloudPath, p => {
-      if (!progress?.onProgress || locals.length === 0) return
-      const slice = progress.span / locals.length
-      const overall = progress.base + slice * (localDone + p / 100)
-      const at = Math.min(localDone + 1, locals.length)
-      progress.onProgress(Math.min(99, Math.round(overall)), `${progress.label} ${at}/${locals.length}`)
-    })
+    let fileProgress = 0
+    const reportFileProgress = (percent: number) => {
+      if (!progress?.onProgress || uploadAborted || !Number.isFinite(percent)) return
+      const highest = Math.max(fileProgress, Math.min(100, percent))
+      totalProgress += highest - fileProgress
+      fileProgress = highest
+      const overall = progress.base + progress.span * (totalProgress / (localCount * 100))
+      progress.onProgress(Math.min(99, Math.round(overall)), `${progress.label} ${localDone + 1}/${localCount}`)
+    }
+    const id = await uploadOneWithRetry(filePath, cloudPath, reportFileProgress)
     progress?.onUploaded?.(id, bytes)
+    reportFileProgress(100)
     localDone += 1
     return id
   })
@@ -524,6 +566,46 @@ function countLocalUploads(input: {
   return n
 }
 
+type PublishState = ['sending', receipt: string] | ['uncertain'] | ['correctable'] | ['different', momentId: string]
+
+type PublishFields = Pick<Moment, 'content' | 'tag' | 'momentDate' | 'location'>
+type PublishMedia = Pick<Moment, 'images' | 'videos' | 'videoCover' | 'livePhotos' | 'voices'>
+
+function samePublishFields(saved: PublishFields, draft: PublishFields): boolean {
+  const savedLocation = saved.location
+  const draftLocation = draft.location
+  return saved.content.trim() === draft.content.trim() && (saved.tag || '') === (draft.tag || '') &&
+    (!draft.momentDate || saved.momentDate === draft.momentDate) &&
+    (savedLocation && draftLocation
+      ? savedLocation.name === draftLocation.name && savedLocation.address === draftLocation.address &&
+        savedLocation.latitude === draftLocation.latitude && savedLocation.longitude === draftLocation.longitude
+      : !savedLocation && !draftLocation)
+}
+
+function publishMediaReceipt({ images, videos, videoCover, livePhotos, voices }: PublishMedia): string {
+  return JSON.stringify([
+    images, videos || [], videoCover || '',
+    (livePhotos || []).map(({ cover, video, duration }) => [cover, video, duration]),
+    (voices || []).map(({ fileID, duration }) => [fileID, duration]),
+  ])
+}
+
+// invoke marks every cloud ok=false as business, including service and database errors.
+const correctableMomentValidationMessages = new Set([
+  '已达到媒体数量额度，请联系管理员',
+  '已达到存储空间额度，请联系管理员',
+  '文字含有不合适的信息，请修改后重试',
+  '日期格式不正确',
+  '回忆日期不能晚于今天',
+  '回忆日期不能早于「在一起」开始日',
+])
+
+function isCorrectableMomentValidation(error: unknown): boolean {
+  const failure = error as { business?: boolean; message?: string } | undefined
+  if (!failure?.business || !failure.message) return false
+  return correctableMomentValidationMessages.has(failure.message) || /^一条动态最多添加 \d+ 个媒体文件$/.test(failure.message)
+}
+
 export async function addMoment(
   input: {
     content: string
@@ -538,8 +620,14 @@ export async function addMoment(
     requestId: string
   },
   onProgress?: UploadProgressFn,
+  onCreateState?: (...event: PublishState) => void,
+  pendingMediaReceipts: readonly string[] = [],
 ): Promise<Moment> {
-  const tick = (pct: number, hint: string) => onProgress?.(pct, hint)
+  let reportedProgress = 0
+  const tick = (pct: number, hint: string) => {
+    reportedProgress = Math.max(reportedProgress, pct)
+    onProgress?.(reportedProgress, hint)
+  }
   const hasUpload = countLocalUploads(input) > 0
   if (hasUpload) tick(2, '准备上传…')
 
@@ -580,7 +668,31 @@ export async function addMoment(
   uploadOwner = owner
   try {
     const previous = await callOurs<Moment | null>('getPublishedMoment', { coupleId: cid, requestId: input.requestId })
-    if (previous) return previous
+    if (previous !== null) {
+      if (!previous?.id) throw new Error('保存结果未确认，请重试')
+      const receipt = publishMediaReceipt(previous)
+      const current = publishMediaReceipt({
+        ...input,
+        videoCover: input.videos?.length ? input.videoCover : '',
+        voices: input.voices?.slice(0, 1).map(({ path, duration }) => ({ fileID: path, duration })),
+      })
+      if (!samePublishFields(previous, input) || (receipt !== current && !pendingMediaReceipts.includes(receipt))) {
+        onCreateState?.('different', previous.id)
+      }
+      return previous
+    }
+    if (!input.content.trim() && !input.images.length && !input.videos?.length && !input.livePhotos?.length && !input.voices?.length) {
+      onCreateState?.('correctable')
+      throw new Error('请填写文字或添加媒体')
+    }
+    const validate = async (payload: Record<string, unknown>) => {
+      try {
+        await callOurs('validateMoment', payload)
+      } catch (error) {
+        if (isCorrectableMomentValidation(error)) onCreateState?.('correctable')
+        throw error
+      }
+    }
     const localPaths = [
       ...input.images, ...(input.videos || []), ...(input.videoCover ? [input.videoCover] : []),
       ...(input.livePhotos || []).flatMap(item => [item.cover, item.video]),
@@ -588,7 +700,7 @@ export async function addMoment(
     ]
     const videoSources = new Set(input.videos || [])
     const mediaBytes = (await Promise.all(localPaths.filter(file => !videoSources.has(file)).map(localFileSize))).reduce((sum, size) => sum + size, 0)
-    await callOurs('validateMoment', {
+    await validate({
       coupleId: cid,
       content: input.content,
       tag: input.tag ?? '',
@@ -602,9 +714,14 @@ export async function addMoment(
     let videoCover = videos.length ? input.videoCover ?? '' : ''
 
     if (videos.some(video => !video.startsWith('cloud://'))) {
-      videos = await compressMomentVideos(videos, (p, h) => tick(p, h))
+      try {
+        videos = await compressMomentVideos(videos, (p, h) => tick(p, h))
+      } catch (error) {
+        onCreateState?.('correctable')
+        throw error
+      }
       const compressedBytes = (await Promise.all(videos.map(localFileSize))).reduce((sum, size) => sum + size, 0)
-      await callOurs('validateMoment', {
+      await validate({
         coupleId: cid, momentDate: input.momentDate, mediaItems: localPaths.length, mediaBytes: mediaBytes + compressedBytes,
       })
     }
@@ -638,14 +755,14 @@ export async function addMoment(
       const v = input.voices[0]
       const fileID = v.path.startsWith('cloud://')
         ? v.path
-        : await uploadMomentVoice(v.path, (p, h) => tick(95 + Math.min(4, p * 0.04), h), trackUploaded)
+        : await uploadMomentVoice(v.path, (p, h) => tick(95 + (p - 90) * 3 / 8, h), trackUploaded)
       voices = [{ fileID, duration: v.duration }]
     }
 
     tick(98, '保存记录…')
     if (uploadAborted) throw new Error('已取消上传')
     ensureUploadOwner()
-    const moment = await callOurs<Moment>('addMoment', {
+    const payload = {
       requestId: input.requestId,
       coupleId: cid,
       content: input.content,
@@ -658,6 +775,15 @@ export async function addMoment(
       location: input.location,
       tag: input.tag ?? '',
       momentDate: input.momentDate,
+    }
+    const receipt = publishMediaReceipt(payload)
+    onCreateState?.('sending', receipt)
+    const moment = await callOurs<Moment>('addMoment', payload).then(result => {
+      if (!result?.id) throw new Error('保存结果未确认，请重试')
+      return result
+    }).catch((err: unknown) => {
+      if (!(err as { business?: boolean })?.business) onCreateState?.('uncertain')
+      throw err
     })
     const used = new Set([
       ...moment.images, ...(moment.videos || []), ...(moment.videoCover ? [moment.videoCover] : []),
@@ -665,6 +791,10 @@ export async function addMoment(
       ...(moment.voices || []).map(item => item.fileID),
     ])
     await finishUploads(used)
+    const savedReceipt = publishMediaReceipt(moment)
+    if (!samePublishFields(moment, payload) || (savedReceipt !== receipt && !pendingMediaReceipts.includes(savedReceipt))) {
+      onCreateState?.('different', moment.id)
+    }
     tick(100, '完成')
     return moment
   } catch (err) {
@@ -687,8 +817,18 @@ export async function addAnniversary(input: {
   date: string
   yearly?: boolean
   remind?: boolean
+  requestId: string
 }): Promise<Anniversary> {
-  return callOurs<Anniversary>('addAnniversary', { coupleId: coupleId(), ...input })
+  try {
+    const anniversary = await callOurs<Anniversary>('addAnniversaryOnce', { coupleId: coupleId(), ...input })
+    if (typeof anniversary?.id !== 'string' || !anniversary.id) throw new Error('保存结果未确认，请重试')
+    return anniversary
+  } catch (err) {
+    if (err instanceof Error && err.message === '未知 action: addAnniversaryOnce') {
+      throw new Error('云端暂不支持保存，请稍后重试')
+    }
+    throw err
+  }
 }
 
 export async function deleteAnniversary(anniversaryId: string): Promise<void> {
@@ -733,8 +873,10 @@ export async function listComments(momentId: string): Promise<MomentComment[]> {
   return callOurs<MomentComment[]>('listComments', { coupleId: coupleId(), momentId })
 }
 
-export async function addComment(momentId: string, content: string): Promise<MomentComment> {
-  return callOurs<MomentComment>('addComment', { coupleId: coupleId(), momentId, content })
+export async function addComment(momentId: string, content: string, requestId: string): Promise<MomentComment> {
+  const comment = await callOurs<MomentComment>('addCommentOnce', { coupleId: coupleId(), momentId, content, requestId })
+  if (typeof comment?.id !== 'string' || !comment.id) throw new Error('评论发送结果未确认，请重试')
+  return comment
 }
 
 export async function deleteComment(commentId: string): Promise<void> {
@@ -754,76 +896,111 @@ export async function setMomentLike(momentId: string, liked: boolean): Promise<M
 }
 
 export async function updateMoment(momentId: string, input: {
-  content: string
-  momentDate: string
-  tag: MomentTag
-  location: MomentLocation | null
+  content?: string
+  momentDate?: string
+  tag?: MomentTag
+  location?: MomentLocation | null
 }): Promise<Moment> {
-  return callOurs<Moment>('updateMoment', { coupleId: coupleId(), momentId, ...input })
+  return callOurs<Moment>('updateMomentFields', { coupleId: coupleId(), momentId, ...input })
 }
 
 function mapLocationKey(location: MomentLocation | null | undefined): string {
   if (!location || location.latitude == null || location.longitude == null) return ''
-  return `${location.latitude.toFixed(4)},${location.longitude.toFixed(4)}`
+  const latitude = Number(location.latitude)
+  const longitude = Number(location.longitude)
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return ''
+  return `${latitude.toFixed(4)},${longitude.toFixed(4)}`
 }
 
-/** 兼容旧版 listMapPlaces：旧云函数没有返回地点对应的最近回忆字段时，从回忆列表补齐。 */
-async function hydrateMapPlaceStories(places: MapPlace[]): Promise<MapPlace[]> {
-  if (!places.length) return places
+function withMapPlaceStory(place: MapPlace, latest: Moment): MapPlace {
+  const fileID = place.latestMomentCoverFileID ?? (
+    latest.images?.[0] || latest.livePhotos?.[0]?.cover || latest.videoCover || ''
+  )
+  return {
+    ...place,
+    latestMomentId: latest.id,
+    latestMomentDate: place.latestMomentDate || latest.momentDate || '',
+    latestMomentContent: place.latestMomentContent || latest.content || '',
+    latestMomentCover: place.latestMomentCover || latest.coverUrl || latest.previewImages?.[0] || undefined,
+    latestMomentCoverFileID: fileID,
+    latestMomentHasVideo: place.latestMomentHasVideo ?? (latest.videos?.length ?? 0) > 0,
+  }
+}
+
+// 旧云函数可能忽略地点参数，保留原有的有限分页回退。
+async function findMapPlaceStories(placeIds: Set<string>, spaceId: string): Promise<Map<string, Moment>> {
   const latestByLocation = new Map<string, Moment>()
   let skip = 0
-  for (let page = 0; page < 10; page++) {
+  for (let page = 0; page < 10 && getSession()?.coupleId === spaceId; page++) {
     const result = await listMomentsPage({ limit: 50, skip })
     for (const moment of result.items) {
       const key = mapLocationKey(moment.location)
-      if (key && !latestByLocation.has(key)) latestByLocation.set(key, moment)
+      if (moment.kind !== 'system' && placeIds.has(key) && !latestByLocation.has(key)) latestByLocation.set(key, moment)
     }
-    if (!result.hasMore || result.items.length === 0) break
+    if (latestByLocation.size === placeIds.size || !result.hasMore || !result.items.length) break
     skip += result.items.length
   }
-
-  return Promise.all(places.map(async place => {
-    const latest = latestByLocation.get(place.id)
-    if (!latest) return place
-    const cover =
-      place.latestMomentCover ||
-      latest.coverUrl ||
-      latest.previewImages?.[0] ||
-      latest.images?.[0] ||
-      latest.livePhotos?.[0]?.cover ||
-      ''
-    let latestMomentCover = cover
-    if (cover.startsWith('cloud://')) {
-      try {
-        latestMomentCover = await resolveCloudUrl(cover)
-      } catch {
-        latestMomentCover = ''
-      }
-    }
-    return {
-      ...place,
-      latestMomentId: place.latestMomentId || latest.id,
-      latestMomentDate: place.latestMomentDate || latest.momentDate || '',
-      latestMomentContent: place.latestMomentContent || latest.content || '',
-      latestMomentCover,
-      latestMomentHasVideo: place.latestMomentHasVideo ?? (latest.videos?.length ?? 0) > 0,
-    }
-  }))
+  return latestByLocation
 }
 
-export async function listMapPlaces(): Promise<{ places: MapPlace[]; cities: MapCityStat[] }> {
-  const data = await callOurs<{ places: MapPlace[]; cities: MapCityStat[] }>('listMapPlaces', {
-    coupleId: coupleId(),
-  })
-  const needsStoryFallback = data.places.some(
-    place => !place.latestMomentId || typeof place.latestMomentCover === 'undefined',
-  )
-  if (!needsStoryFallback) return data
+/** 按需补齐足迹页选中的旧版地点故事，云封面交由页面单独解析。 */
+export async function getMapPlaceStory(place: MapPlace): Promise<MapPlace> {
+  if (place.latestMomentId) {
+    const latest = await getMoment(place.latestMomentId)
+    return latest?.id === place.latestMomentId && mapLocationKey(latest.location) === place.id
+      ? withMapPlaceStory(place, latest)
+      : place
+  }
+
+  const spaceId = coupleId()
+  let latest: Moment | undefined
   try {
-    return { ...data, places: await hydrateMapPlaceStories(data.places) }
+    const { items } = await listMomentsPage({ limit: 1, locationKey: place.id })
+    latest = items.find(moment => moment.kind !== 'system' && mapLocationKey(moment.location) === place.id)
   } catch {
-    // 地图本身仍可用；故事卡拿不到补充数据时保留地点统计和占位状态。
-    return data
+    // 部分旧云函数可能不支持地点筛选。
+  }
+  if (!latest) latest = (await findMapPlaceStories(new Set([place.id]), spaceId)).get(place.id)
+  return latest ? withMapPlaceStory(place, latest) : place
+}
+
+export async function listMapPlaces({ deferCoverUrls = false } = {}): Promise<{ places: MapPlace[]; cities: MapCityStat[] }> {
+  const spaceId = coupleId()
+  const data = await callOurs<{ places: MapPlace[]; cities: MapCityStat[] }>('listMapPlaces', {
+    coupleId: spaceId,
+    ...(deferCoverUrls ? { deferCoverUrls: true } : {}),
+  })
+  let places: MapPlace[] = data.places.map(place => {
+    const cover = place.latestMomentCover
+    return { ...place, latestMomentCover: cover && !cover.startsWith('cloud://') ? cover : place.latestMomentCoverUrl || cover }
+  })
+  if (deferCoverUrls) return { ...data, places }
+
+  const missingStory = places.filter(place => !place.latestMomentId || (
+    place.latestMomentCover == null && place.latestMomentCoverFileID == null
+  ))
+  if (missingStory.length) {
+    try {
+      const stories = await findMapPlaceStories(new Set(missingStory.map(place => place.id)), spaceId)
+      places = places.map(place => {
+        const latest = stories.get(place.id)
+        return latest && (!place.latestMomentId || place.latestMomentId === latest.id)
+          ? withMapPlaceStory(place, latest)
+          : place
+      })
+    } catch {
+      // 补充失败时仍返回地点统计。
+    }
+  }
+  return {
+    ...data,
+    places: await Promise.all(places.map(async place => {
+      const cover = place.latestMomentCover ?? place.latestMomentCoverFileID
+      if (!cover) return place
+      if (!cover.startsWith('cloud://')) return { ...place, latestMomentCover: cover }
+      const latestMomentCover = await resolveCloudUrl(cover).catch(() => '')
+      return { ...place, latestMomentCover }
+    })),
   }
 }
 

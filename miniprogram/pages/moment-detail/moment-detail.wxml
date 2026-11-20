@@ -9,7 +9,7 @@
     <text class="head__who role-{{item.role === 'A' ? 'you' : 'them'}}">{{item.author}} 记的</text>
     <text wx:if="{{item.tagLabel}}" class="head__tag chip">{{item.tagLabel}}</text>
   </view>
-  <view wx:if="{{mediaError}}" class="interaction-error" bindtap="onRetry">{{mediaError}}</view>
+  <view wx:if="{{mediaError}}" class="interaction-error" bindtap="onRetryMedia">{{mediaError}}</view>
 
   <view wx:if="{{item.livePhotos.length > 0}}" class="live-gallery">
     <view class="live-gallery__item" wx:for="{{item.livePhotos}}" wx:key="video">
@@ -17,11 +17,14 @@
     </view>
   </view>
 
-  <view wx:if="{{item.video}}" class="video-wrap">
+  <view class="video-wrap" wx:for="{{item.videos}}" wx:for-item="video" wx:key="key">
     <video
       class="video-wrap__player"
-      src="{{item.video}}"
+      src="{{video.src}}"
       poster="{{item.videoCover}}"
+      data-key="{{video.key}}"
+      data-src="{{video.src}}"
+      binderror="onMediaError"
       controls
       show-center-play-btn
       object-fit="contain" />
@@ -33,16 +36,18 @@
   </view>
 
   <view wx:if="{{item.imgCount > 0}}" class="gallery">
-    <view class="gallery__item" wx:for="{{item.images}}" wx:key="*this" wx:for-item="src">
-      <view class="widescreen" data-src="{{src}}" bindtap="onTapImage">
+    <view class="gallery__item" wx:for="{{item.images}}" wx:key="key" wx:for-item="image">
+      <view class="widescreen" data-src="{{image.src}}" bindtap="onTapImage">
         <image
-          class="{{loadedImgs[src] ? 'is-loaded' : ''}}"
-          src="{{src}}"
+          class="{{loadedImgs[image.key] ? 'is-loaded' : ''}}"
+          src="{{image.src}}"
           mode="aspectFill"
           lazy-load
-          data-src="{{src}}"
-          bindload="onImgLoad" />
-        <view class="gallery__gif" wx:if="{{src.indexOf('.gif') !== -1 || src.indexOf('.GIF') !== -1}}">GIF</view>
+          data-key="{{image.key}}"
+          data-src="{{image.src}}"
+          bindload="onImgLoad"
+          binderror="onMediaError" />
+        <view class="gallery__gif" wx:if="{{image.src.indexOf('.gif') !== -1 || image.src.indexOf('.GIF') !== -1}}">GIF</view>
       </view>
     </view>
   </view>
@@ -54,10 +59,10 @@
   </view>
 
   <view class="interact card-soft" wx:if="{{canInteract}}">
-    <view wx:if="{{interactionError}}" class="interaction-error" bindtap="onRetry">{{interactionError}}</view>
+    <view wx:if="{{interactionError}}" class="interaction-error" bindtap="onRetryInteractions">{{interactionError}}</view>
     <view class="interact__row">
       <view class="like-btn {{liked ? 'is-on' : ''}}" hover-class="u-press" bindtap="onToggleLike">
-        <text>{{liked ? '♥' : '♡'}} {{likeCount}}</text>
+        <text>{{likeUnavailable ? '点赞暂不可用' : (liked ? '♥' : '♡') + ' ' + likeCount}}</text>
       </view>
     </view>
     <view class="comments">
@@ -67,7 +72,9 @@
         <text class="comment__text">{{item.content}}</text>
         <text wx:if="{{item.canDelete}}" class="comment__del" data-id="{{item.id}}" bindtap="onDeleteComment">删除</text>
       </view>
-      <view wx:if="{{comments.length === 0}}" class="comments__empty">还没有评论</view>
+      <view wx:if="{{commentsStatus === 'error'}}" class="interaction-error" bindtap="onRetryComments">评论未能加载，点此重试</view>
+      <view wx:elif="{{commentsStatus === 'loading' && comments.length === 0}}" class="comments__empty">正在加载评论…</view>
+      <view wx:elif="{{commentsStatus === 'empty' && comments.length === 0}}" class="comments__empty">还没有评论</view>
     </view>
     <view class="comment-compose">
       <input class="comment-compose__input" placeholder="说点什么…" value="{{commentDraft}}" bindinput="onCommentInput" maxlength="-1" />

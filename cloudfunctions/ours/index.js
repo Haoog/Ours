@@ -471,8 +471,9 @@ function usageFromRecords(moments, rants) {
   }
 }
 
-async function rebuildUsage(coupleId) {
-  const moments = await getAllByWhere('moments', { coupleId })
+async function rebuildUsage(coupleId, { excludeMomentId, returnNullOnMediaError = false } = {}) {
+  const records = await getAllByWhere('moments', { coupleId })
+  const moments = excludeMomentId === undefined ? records : records.filter(moment => moment._id !== excludeMomentId)
   let rants = []
   try {
     rants = await getAllByWhere('rants', { coupleId })
@@ -486,11 +487,14 @@ async function rebuildUsage(coupleId) {
     ...moments.filter(moment => moment.kind !== 'system'),
     ...rants,
   ]
-  const fileIDs = [
-    ...moments.filter(moment => moment.kind !== 'system').flatMap(collectMomentFileIDs),
-    ...rants.flatMap(collectMomentFileIDs),
-  ]
-  const sizes = await measureCloudFileSizes(fileIDs)
+  const fileIDs = mediaRecords.flatMap(collectMomentFileIDs)
+  let sizes
+  try {
+    sizes = await measureCloudFileSizes(fileIDs)
+  } catch (error) {
+    if (returnNullOnMediaError) return null
+    throw error
+  }
   // A file referenced by two records is charged to both records, matching
   // normal publish/delete accounting. Duplicate IDs within one record count once.
   const storageBytes = mediaRecords.reduce((total, record) => {
@@ -794,10 +798,11 @@ async function updateProfile(openid, payload = {}) {
   const { coupleId, nickname, avatarUrl } = payload
   const { couple, role } = await requireMember(openid, coupleId)
   const field = role === 'A' ? 'memberA' : 'memberB'
-  const member = { ...couple[field], nickname, avatarUrl: avatarUrl ?? couple[field].avatarUrl }
-  await db.collection('couples').doc(coupleId).update({
-    data: { [field]: member },
-  })
+  const data = {}
+  if (nickname !== undefined) data[`${field}.nickname`] = nickname
+  if (avatarUrl != null) data[`${field}.avatarUrl`] = avatarUrl
+  if (!Object.keys(data).length) return serializeCouple(couple)
+  await db.collection('couples').doc(coupleId).update({ data })
   const fresh = await getCoupleDoc(coupleId)
   return serializeCouple(fresh)
 }
@@ -874,7 +879,7 @@ function daysUntilAnniversary(dateStr, yearly = true, now = new Date()) {
   if (!Number.isFinite(original)) return 0
   const today = todayKey(now)
   const todayEpoch = dateKeyEpoch(today)
-  if (!yearly) return (original - todayEpoch) / 86400000
+  if (!yearly || original >= todayEpoch) return (original - todayEpoch) / 86400000
   const [, month, day] = dateStr.split('-').map(Number)
   const inYear = year => Date.UTC(year, month - 1, Math.min(day, new Date(Date.UTC(year, month, 0)).getUTCDate()))
   const year = Number(today.slice(0, 4))
@@ -937,34 +942,34 @@ function passesMediaFilter(m, mediaFilter) {
 async function enrichMomentsList(items, coupleId, role) {
   if (!items.length) return []
   const momentIds = items.map(m => m.id)
-  let commentsRes = { data: [] }
-  let likesRes = { data: [] }
-  try {
-    for (let index = 0; index < momentIds.length; index += 20) {
-      const momentId = _.in(momentIds.slice(index, index + 20))
-      const [comments, likes] = await Promise.all([
-        getAllByWhere('moment_comments', { coupleId, momentId }),
-        getAllByWhere('moment_likes', { coupleId, momentId }),
-      ])
-      commentsRes.data.push(...comments)
-      likesRes.data.push(...likes)
+  const previewIds = items.flatMap(m => [...pickPreviewFileIDs(m), pickCoverFileID(m)])
+  const urls = resolveFileUrls(previewIds)
+  const commentCount = new Map()
+  const likeMap = new Map()
+  for (let index = 0; index < momentIds.length; index += 20) {
+    const momentId = _.in(momentIds.slice(index, index + 20))
+    const where = { coupleId, momentId }
+    const [comments, likes] = await Promise.allSettled([
+      getAllByWhere('moment_comments', where, { field: { momentId: true } }),
+      getAllByWhere('moment_likes', where, { field: { momentId: true, role: true } }),
+    ])
+    if (comments.status === 'fulfilled') {
+      for (const row of comments.value) commentCount.set(row.momentId, (commentCount.get(row.momentId) || 0) + 1)
+    } else {
+      console.warn('enrichMomentsList comments', comments.reason?.message)
     }
-  } catch (e) {
-    console.warn('enrichMomentsList', e.message)
+    if (likes.status === 'fulfilled') {
+      for (const row of likes.value) {
+        const current = likeMap.get(row.momentId) || { count: 0, likedByMe: false }
+        current.count++
+        current.likedByMe ||= row.role === role
+        likeMap.set(row.momentId, current)
+      }
+    } else {
+      console.warn('enrichMomentsList likes', likes.reason?.message)
+    }
   }
-  const commentCount = {}
-  for (const c of commentsRes.data) {
-    commentCount[c.momentId] = (commentCount[c.momentId] || 0) + 1
-  }
-  const likeMap = {}
-  for (const l of likesRes.data) {
-    if (!likeMap[l.momentId]) likeMap[l.momentId] = { count: 0, likedByMe: false }
-    likeMap[l.momentId].count += 1
-    if (l.role === role) likeMap[l.momentId].likedByMe = true
-  }
-  const previewIds = []
-  for (const m of items) previewIds.push(...pickPreviewFileIDs(m))
-  const urlMap = await resolveFileUrls([...new Set([...previewIds, ...items.map(pickCoverFileID)])].filter(Boolean))
+  const urlMap = await urls
   return items.map(raw => {
     const m = normalizeMomentFields(raw)
     const coverId = pickCoverFileID(m)
@@ -975,13 +980,26 @@ async function enrichMomentsList(items, coupleId, role) {
       .filter(Boolean)
     return {
       ...m,
-      commentCount: commentCount[m.id] || 0,
-      likeCount: likeMap[m.id]?.count || 0,
-      likedByMe: likeMap[m.id]?.likedByMe || false,
+      commentCount: commentCount.get(m.id) || 0,
+      likeCount: likeMap.get(m.id)?.count || 0,
+      likedByMe: likeMap.get(m.id)?.likedByMe || false,
       coverUrl,
       previewImages,
     }
   })
+}
+
+function mapCoordinates(location) {
+  if (location?.latitude == null || location.longitude == null) return null
+  const latitude = Number(location.latitude), longitude = Number(location.longitude)
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null
+  return { latitude, longitude }
+}
+
+function mapPlaceKey({ latitude, longitude }, fromLink = false) {
+  // A link can encode the negative side of zero, which Number parses as -0.
+  const format = value => fromLink && Object.is(value, -0) ? '-0.0000' : value.toFixed(4)
+  return `${format(latitude)},${format(longitude)}`
 }
 
 async function queryMomentsPage(openid, payload, withKeyword) {
@@ -992,12 +1010,16 @@ async function queryMomentsPage(openid, payload, withKeyword) {
   const offset = integerOr(skip, 0)
   const where = { coupleId, kind: 'post' }
   if (tag) where.tag = tag
+  let placeKey = ''
   if (locationKey) {
     const parts = String(locationKey).split(',')
-    const [latitude, longitude] = parts.map(Number)
-    if (parts.length !== 2 || parts.some(part => !part.trim()) || !Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) throw new Error('地点无效')
-    where['location.latitude'] = _.gte(latitude - 0.00005).and(_.lt(latitude + 0.00005))
-    where['location.longitude'] = _.gte(longitude - 0.00005).and(_.lt(longitude + 0.00005))
+    const [latitude, longitude] = parts
+    const coordinates = mapCoordinates({ latitude, longitude })
+    if (parts.length !== 2 || parts.some(part => !part.trim()) || !coordinates) throw new Error('地点无效')
+    placeKey = mapPlaceKey(coordinates, true)
+    // Keep legacy string coordinates in the candidate set as well as numbers.
+    where['location.latitude'] = _.exists(true)
+    where['location.longitude'] = _.exists(true)
   }
   if (payload.locationName) where['location.name'] = String(payload.locationName)
   if (Number(year) >= 1970) {
@@ -1009,10 +1031,9 @@ async function queryMomentsPage(openid, payload, withKeyword) {
     where.content = db.RegExp({ regexp: String(keyword).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), options: 'i' })
   }
 
-  if (mediaFilter) {
-    if (!['image', 'voice', 'live'].includes(mediaFilter)) throw new Error('媒体筛选类型无效')
-    // Keep legacy documents searchable without requiring a migration. Offset
-    // and total must count matching rows, not unfiltered database rows.
+  if (mediaFilter && !['image', 'voice', 'live'].includes(mediaFilter)) throw new Error('媒体筛选类型无效')
+  if (mediaFilter || placeKey) {
+    // Apply the exact filters before counting matches or consuming the offset.
     const orderBy = [['momentDate', 'desc'], ['createdAt', 'desc'], ['_id', 'desc']]
     const page = []
     let total = 0
@@ -1022,6 +1043,10 @@ async function queryMomentsPage(openid, payload, withKeyword) {
       const { data } = await query.skip(rawOffset).limit(QUERY_BATCH_SIZE).get()
       for (const { _id, ...rest } of data) {
         if (!passesMediaFilter(rest, mediaFilter)) continue
+        if (placeKey) {
+          const coordinates = mapCoordinates(rest.location)
+          if (!coordinates || mapPlaceKey(coordinates) !== placeKey) continue
+        }
         if (total >= offset && page.length < pageSize) {
           page.push(normalizeMomentFields({ id: _id, ...rest }))
         }
@@ -1033,26 +1058,46 @@ async function queryMomentsPage(openid, payload, withKeyword) {
     return { items, total, hasMore: offset + items.length < total }
   }
 
+  const { cursor } = payload
+  // A null cursor opts in from the first page; omission keeps the offset contract.
+  const useCursor = cursor !== undefined
+  let pageWhere = where
+  if (useCursor && cursor !== null) {
+    const { momentDate, createdAt, id } = cursor || {}
+    if (typeof momentDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(momentDate) ||
+        !Number.isFinite(createdAt) || typeof id !== 'string' || !id) {
+      throw new Error('回忆分页位置无效')
+    }
+    // Use the saved sort keys even if the boundary record has since been deleted.
+    pageWhere = _.and([where, _.or([
+      { momentDate: _.lt(momentDate) },
+      { momentDate, createdAt: _.lt(createdAt) },
+      { momentDate, createdAt, _id: _.lt(id) },
+    ])])
+  }
+  let query = db.collection('moments').where(pageWhere)
+    .orderBy('momentDate', 'desc').orderBy('createdAt', 'desc').orderBy('_id', 'desc')
+  if (!useCursor) query = query.skip(offset)
   const [countRes, res] = await Promise.all([
     db.collection('moments').where(where).count(),
-    db
-      .collection('moments')
-      .where(where)
-      .orderBy('momentDate', 'desc').orderBy('createdAt', 'desc').orderBy('_id', 'desc')
-      .skip(offset)
-      .limit(pageSize)
-      .get(),
+    query.limit(useCursor ? pageSize + 1 : pageSize).get(),
   ])
   const total = countRes.total || 0
-  const raw = res.data.map(m => {
+  const rows = res.data.slice(0, pageSize)
+  const raw = rows.map(m => {
     const { _id, ...rest } = m
     return normalizeMomentFields({ id: _id, ...rest })
   })
   const items = await enrichMomentsList(raw, coupleId, role)
+  if (!useCursor) return { items, total, hasMore: offset + items.length < total }
+
+  const hasMore = res.data.length > pageSize
+  const last = rows[rows.length - 1]
   return {
     items,
     total,
-    hasMore: offset + items.length < total,
+    hasMore,
+    nextCursor: hasMore ? { momentDate: last.momentDate, createdAt: last.createdAt, id: last._id } : null,
   }
 }
 
@@ -1456,8 +1501,16 @@ async function deleteMoment(openid, payload = {}) {
   if (record.coupleId !== coupleId) throw new Error('动态不存在')
   const fileIDs = collectMomentFileIDs(record)
   const mediaBytes = Number.isFinite(record.mediaBytes)
-    ? record.mediaBytes : await measureCloudFileBytes(fileIDs)
-  const reconciledUsage = await usageForWrite(coupleId, couple)
+    ? record.mediaBytes : await measureCloudFileBytes(fileIDs).catch(() => null)
+  const needsRebuild = Number(couple.usageVersion) !== USAGE_VERSION
+  const reconciledUsage = mediaBytes !== null && needsRebuild
+    ? await rebuildUsage(coupleId, { returnNullOnMediaError: true })
+    : null
+  // The exclusive space lease covers this scan and the deletion transaction.
+  // A file still referenced by a remaining record must be measured successfully.
+  const remainingUsage = mediaBytes === null || (needsRebuild && reconciledUsage === null)
+    ? await rebuildUsage(coupleId, { excludeMomentId: momentId })
+    : null
   await db.runTransaction(async transaction => {
     const moment = await optionalDoc(transaction.collection('moments'), momentId)
     if (!moment) return
@@ -1471,7 +1524,7 @@ async function deleteMoment(openid, payload = {}) {
     await transaction.collection('moments').doc(momentId).remove()
     await transaction.collection('couples').doc(coupleId).update({
       data: {
-        usage: {
+        usage: remainingUsage ?? {
           momentCount: Math.max(0, usage.momentCount - (moment.kind === 'system' ? 0 : 1)),
           mediaItems: Math.max(0, usage.mediaItems - integerOr(moment.mediaItems, countMomentMedia(moment), 0)),
           storageBytes: Math.max(0, usage.storageBytes - mediaBytes),
@@ -1585,23 +1638,51 @@ async function listAnniversaries(openid, payload = {}) {
   })
 }
 
-async function addAnniversary(openid, payload = {}) {
-  const { coupleId, title, date, yearly = true, remind = true } = payload
+async function addAnniversary(openid, payload = {}, requireRequestId = false) {
+  const { coupleId, title, date, yearly = true, remind = true, requestId } = payload
   await requireMember(openid, coupleId)
-  if (!String(title || '').trim()) throw new Error('请填写纪念日名称')
+  if (typeof title !== 'string' || !title.trim()) throw new Error('请填写纪念日名称')
+  if (requireRequestId && (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,100}$/.test(requestId))) {
+    throw new Error('缺少有效的纪念日请求编号')
+  }
+
+  const anniversaries = db.collection('anniversaries')
+  const id = requireRequestId ? hashSecret(JSON.stringify([coupleId, openid, requestId])).slice(0, 32) : null
+  const fields = { coupleId, title: title.trim(), date, yearly: !!yearly, remind: !!remind }
+  const receipt = (anniversaryId, saved) => ({
+    id: anniversaryId, ...saved, daysLeft: daysUntilAnniversary(saved.date, saved.yearly),
+  })
+  const replay = ({ _id, ...saved }) => {
+    if (Object.keys(fields).some(key => fields[key] !== saved[key])) {
+      throw new Error('纪念日请求编号与原记录不匹配')
+    }
+    return receipt(id, saved)
+  }
+  if (id) {
+    const existing = await optionalDoc(anniversaries, id)
+    if (existing) return replay(existing)
+  }
+
   await assertTextSafe(openid, title, '纪念日名称')
   if (!date) throw new Error('请选择日期')
   assertValidDateKey(date)
-  const data = {
-    coupleId,
-    title: (title || '').trim(),
-    date,
-    yearly: !!yearly,
-    remind: !!remind,
-    createdAt: Date.now(),
+  const data = { ...fields, createdAt: Date.now() }
+  if (!id) {
+    const res = await anniversaries.add({ data })
+    return receipt(res._id, data)
   }
-  const res = await db.collection('anniversaries').add({ data })
-  return { id: res._id, ...data, daysLeft: daysUntilAnniversary(date, yearly) }
+
+  return db.runTransaction(async transaction => {
+    const couple = await optionalDoc(transaction.collection('couples'), coupleId)
+    if (!couple) throw new Error('空间不存在')
+    if (!roleOf(openid, couple)) throw new Error('无权访问该空间')
+    assertAccessActive(couple)
+    const collection = transaction.collection('anniversaries')
+    const existing = await optionalDoc(collection, id)
+    if (existing) return replay(existing)
+    await collection.doc(id).set({ data })
+    return receipt(id, data)
+  })
 }
 
 async function deleteAnniversary(openid, payload = {}) {
@@ -1911,24 +1992,59 @@ async function listComments(openid, payload = {}) {
   })
 }
 
-async function addComment(openid, payload = {}) {
-  const { coupleId, momentId, content } = payload
+async function addComment(openid, payload = {}, requireRequestId = false) {
+  const { coupleId, momentId, content, requestId } = payload
   const { role } = await requireMember(openid, coupleId)
-  if (!String(content || '').trim()) throw new Error('请填写评论内容')
-  const m = await db.collection('moments').doc(momentId).get()
-  if (!m.data || m.data.coupleId !== coupleId) throw new Error('动态不存在')
-  if (m.data.kind === 'system') throw new Error('系统卡片暂不支持评论')
-  await assertTextSafe(openid, content, '评论')
-  const data = {
-    coupleId,
-    momentId,
-    content: (content || '').trim(),
-    authorOpenid: openid,
-    authorRole: role,
-    createdAt: Date.now(),
+  const reject = message => { throw Object.assign(new Error(message), { commentRejected: true }) }
+  const text = typeof content === 'string' ? content.trim() : ''
+  if (!text) reject('请填写评论内容')
+  if (typeof momentId !== 'string' || !momentId) reject('动态不存在')
+  if (requireRequestId && (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,100}$/.test(requestId))) {
+    reject('缺少有效的评论请求编号')
   }
-  const res = await db.collection('moment_comments').add({ data })
-  return { id: res._id, ...data }
+  const assertCommentable = moment => {
+    if (!moment || moment.coupleId !== coupleId) reject('动态不存在')
+    if (moment.kind === 'system') reject('系统卡片暂不支持评论')
+  }
+  assertCommentable(await optionalDoc(db.collection('moments'), momentId))
+
+  const comments = db.collection('moment_comments')
+  const id = requireRequestId ? hashSecret(JSON.stringify([coupleId, momentId, openid, requestId])).slice(0, 32) : null
+  const canonical = ({ _id, ...record }) => {
+    if (record.content !== text || record.authorOpenid !== openid || record.coupleId !== coupleId || record.momentId !== momentId) {
+      reject('评论请求编号与原评论不匹配')
+    }
+    return { ...record, id }
+  }
+  if (id) {
+    const existing = await optionalDoc(comments, id)
+    if (existing) return canonical(existing)
+  }
+  try {
+    await assertTextSafe(openid, text, '评论')
+  } catch (error) {
+    if (error.message === '评论含有不合适的信息，请修改后重试') reject(error.message)
+    throw error
+  }
+  const data = { coupleId, momentId, content: text, authorOpenid: openid, authorRole: role, createdAt: Date.now() }
+  if (!id) {
+    const res = await comments.add({ data })
+    return { id: res._id, ...data }
+  }
+  return db.runTransaction(async transaction => {
+    const couple = await optionalDoc(transaction.collection('couples'), coupleId)
+    if (!couple) reject('空间不存在')
+    const authorRole = roleOf(openid, couple)
+    if (!authorRole) reject('无权访问该空间')
+    assertAccessActive(couple)
+    assertCommentable(await optionalDoc(transaction.collection('moments'), momentId))
+    const collection = transaction.collection('moment_comments')
+    const existing = await optionalDoc(collection, id)
+    if (existing) return canonical(existing)
+    const record = { ...data, authorRole }
+    await collection.doc(id).set({ data: record })
+    return { ...record, id }
+  })
 }
 
 async function deleteComment(openid, payload = {}) {
@@ -2001,42 +2117,56 @@ async function setMomentLike(openid, payload = {}) {
 
 async function updateMoment(openid, payload = {}) {
   const { coupleId, momentId, content, tag, momentDate, location } = payload
-  const { role, couple } = await requireMember(openid, coupleId)
-  await assertTextSafe(openid, content, '文字')
-  const date = resolveMomentDate({ momentDate }, couple)
+  await requireMember(openid, coupleId)
+  if (content !== undefined) await assertTextSafe(openid, content, '文字')
   let saved
   await db.runTransaction(async transaction => {
     const freshCouple = await optionalDoc(transaction.collection('couples'), coupleId)
     assertAccessActive(freshCouple)
-    if (!roleOf(openid, freshCouple)) throw new Error('无权访问该空间')
+    const role = roleOf(openid, freshCouple)
+    if (!role) throw new Error('无权访问该空间')
     const record = await optionalDoc(transaction.collection('moments'), momentId)
     if (!record || record.coupleId !== coupleId) throw new Error('动态不存在')
     if (record.authorRole !== role || record.kind === 'system') throw new Error('只能编辑自己发布的回忆')
-    const text = String(content || '').trim()
-    if (!text && !countMomentMedia(record)) throw new Error('请保留文字或媒体内容')
-    const patch = {
-      content: text, tag: normalizeMomentTag(tag), momentDate: date,
-      location: location || null, sortAt: sortAtForMomentDate(date, record.createdAt), updatedAt: Date.now(),
+    const patch = {}
+    if (content !== undefined) {
+      patch.content = String(content || '').trim()
+      if (!patch.content && !countMomentMedia(record)) throw new Error('请保留文字或媒体内容')
     }
-    await transaction.collection('moments').doc(momentId).update({ data: patch })
-    saved = { ...record, ...patch, id: momentId }
+    if (tag !== undefined) patch.tag = normalizeMomentTag(tag)
+    if (location !== undefined) patch.location = location || null
+    if (momentDate !== undefined) {
+      const originalDate = normalizeMomentFields(record).momentDate
+      const rawDate = (momentDate || todayKey()).trim()
+      assertValidDateKey(rawDate)
+      if (rawDate !== originalDate) {
+        patch.momentDate = resolveMomentDate({ momentDate: rawDate }, freshCouple)
+        patch.sortAt = sortAtForMomentDate(patch.momentDate, record.createdAt)
+      }
+    }
+    if (Object.keys(patch).length) {
+      patch.updatedAt = Date.now()
+      await transaction.collection('moments').doc(momentId).update({ data: patch })
+    }
+    saved = { ...normalizeMomentFields({ ...record, ...patch }), id: momentId }
   })
   return saved
 }
 
 async function listMapPlaces(openid, payload = {}) {
-  const { coupleId } = payload
+  const { coupleId, deferCoverUrls } = payload
   await requireMember(openid, coupleId)
   const moments = await getAllByWhere('moments', { coupleId })
   const placeMap = new Map()
   const cityMap = new Map()
   for (const m of moments) {
-    if (m.kind === 'system' || !m.location || m.location.latitude == null || m.location.longitude == null) continue
+    if (m.kind !== 'post') continue
     const loc = m.location
-    const latitude = Number(loc.latitude), longitude = Number(loc.longitude)
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) continue
+    const coordinates = mapCoordinates(loc)
+    if (!coordinates) continue
+    const { latitude, longitude } = coordinates
     const normalized = normalizeMomentFields(m)
-    const key = `${latitude.toFixed(4)},${longitude.toFixed(4)}`
+    const key = mapPlaceKey(coordinates)
     if (!placeMap.has(key)) {
       placeMap.set(key, {
         id: key,
@@ -2072,13 +2202,14 @@ async function listMapPlaces(openid, payload = {}) {
     cityMap.set(city, (cityMap.get(city) || 0) + 1)
   }
   const places = [...placeMap.values()].sort((a, b) => compareMomentOrder(a.latestRecord, b.latestRecord))
-  const latestCoverIDs = places.map(p => p.latestMomentCoverId).filter(Boolean)
-  const urlMap = await resolveFileUrls(latestCoverIDs)
+  // Only the footprint page opts out. Existing clients still receive signed URLs.
+  const urlMap = deferCoverUrls === true ? {} : await resolveFileUrls(places.map(p => p.latestMomentCoverId))
   return {
     places: places.map(place => {
       const { latestMomentCoverId, latestMomentSortAt, latestRecord, ...rest } = place
       return {
         ...rest,
+        latestMomentCoverFileID: latestMomentCoverId,
         latestMomentCover:
           latestMomentCoverId && latestMomentCoverId.startsWith('cloud://')
             ? urlMap[latestMomentCoverId] || ''
@@ -2352,6 +2483,7 @@ exports.main = async (event) => {
         data = await addMoment(openid, payload)
         break
       case 'updateMoment':
+      case 'updateMomentFields':
         data = await updateMoment(openid, payload)
         break
       case 'setMomentLike':
@@ -2380,6 +2512,9 @@ exports.main = async (event) => {
         break
       case 'addAnniversary':
         data = await addAnniversary(openid, payload)
+        break
+      case 'addAnniversaryOnce':
+        data = await addAnniversary(openid, payload, true)
         break
       case 'deleteAnniversary':
         data = await deleteAnniversary(openid, payload)
@@ -2410,6 +2545,14 @@ exports.main = async (event) => {
         break
       case 'addComment':
         data = await addComment(openid, payload)
+        break
+      case 'addCommentOnce':
+        try {
+          data = await addComment(openid, payload, true)
+        } catch (error) {
+          if (error.commentRejected) return { ok: false, error: error.message, commentRejected: true }
+          throw error
+        }
         break
       case 'deleteComment':
         data = await deleteComment(openid, payload)
